@@ -19,5 +19,5 @@ Build: not started / in progress / ready for review. Review: — / PASS / FAIL (
 | B5 | B    | Voice orb | done | PASS | m3(B5) | Reviewer fix: done orb draws once; B6: feed mic/playback levelSource per state |
 | B6 | B    | Turn-flow wiring | done | PASS | m3(B6) | 3 reviewer fixes (reply silenced by prop-change cleanup, QuestionCard hooks-after-return crash, Space ignores select); J1: delete redundant panel Space listener |
 | J1 | Join | End-to-end + team notes | done | PASS | m3(J1) | 4 reviewer fixes (domain_prompt bypassed style prompt/cap, stuck Thinking on disable mid-hold, notes used nonexistent req.audio_mime, deviations). Live round-trip 845 ms. Pending: Shreyas's physical mic viva |
-| J2 | Join | Final review | not started | — | — | |
+| J2 | Join | Final review | done | PASS | m3(J2) | Voice → en-US-AndrewNeural; fillers verified regenerated (byte-length match); reviewer fix: browser-TTS fallback prefers en-US. Pending: Shreyas's accent check + physical mic viva |
 

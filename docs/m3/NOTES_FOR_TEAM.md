@@ -11,7 +11,7 @@
 
 The Voice Pipeline (M3) is fully built, hardened, and verified end-to-end against live audio synthesis and transcription:
 - **STT (Groq Whisper `whisper-large-v3-turbo`):** ~800ms transcription latency with domain keyword biasing (`cosine`, `dot product`, `embeddings`, `L2-norm`) and silence artifact filtering.
-- **TTS (Edge-TTS `en-IN-PrabhatNeural`):** Cold synthesis ~1.0s, in-memory LRU cache ~0.08ms, ElevenLabs fallback support.
+- **TTS (Edge-TTS `en-US-AndrewNeural`):** Cold synthesis ~1.0s, in-memory LRU cache ~0.08ms, ElevenLabs fallback support.
 - **Filler Audio:** 3 pre-generated clips stored on disk (`filler_cache/`) and served via `/api/voice/fillers` for instant sub-200ms acoustic feedback while student answers are evaluated.
 - **Frontend UI (`ExaminerPanel`):** Push-to-talk with Spacebar / touch hold, live audio-reactive `VoiceOrb` (canvas 60fps), word-by-word karaoke highlighting of examiner questions synced to audio progress, 4-level Bloom's depth meter, collapsible transcript history, text fallback, inline error banner with 'Retry', and barge-in.
 - **Verification:** 15/15 checks pass in `python -m voice.selftest`, 46/46 unit tests pass in `test_b6.cjs`, 0 TypeScript errors (`tsc --noEmit`), and full automated multi-turn viva runs from Turn 1 to `done=True` in 817ms response latency.
@@ -30,7 +30,7 @@ The Voice Pipeline (M3) is fully built, hardened, and verified end-to-end agains
   ```env
   GROQ_STT_MODEL=whisper-large-v3-turbo
   STT_TIMEOUT_S=10
-  TTS_VOICE=en-IN-PrabhatNeural
+  TTS_VOICE=en-US-AndrewNeural
   TTS_RATE=+0%
   TTS_TIMEOUT_S=8
   ELEVENLABS_API_KEY=

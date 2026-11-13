@@ -731,8 +731,8 @@ if (typeof window !== 'undefined' && window.speechSynthesis) {
 }
 
 /**
- * Voice selection preferring en-IN voices (e.g. Prabhat/Heera/Indian English),
- * falling back to en-US, then any English voice.
+ * Voice selection preferring en-US voices (matching the backend Edge-TTS voice),
+ * falling back to en-IN, then any English voice.
  */
 export function getPreferredTTSVoice(): SpeechSynthesisVoice | null {
   if (typeof window === 'undefined' || !window.speechSynthesis) return null
@@ -740,19 +740,19 @@ export function getPreferredTTSVoice(): SpeechSynthesisVoice | null {
   const voices = live && live.length > 0 ? live : cachedVoices
   if (!voices || voices.length === 0) return null
 
-  // 1. Prefer en-IN voice
-  const enIn = voices.find((v) => {
-    const l = (v.lang || '').toLowerCase().replace('_', '-')
-    return l === 'en-in' || l.startsWith('en-in') || /india/i.test(v.name)
-  })
-  if (enIn) return enIn
-
-  // 2. Else en-US voice
+  // 1. Prefer en-US voice (matches backend TTS_VOICE en-US-AndrewNeural)
   const enUs = voices.find((v) => {
     const l = (v.lang || '').toLowerCase().replace('_', '-')
     return l === 'en-us' || l.startsWith('en-us')
   })
   if (enUs) return enUs
+
+  // 2. Else en-IN voice
+  const enIn = voices.find((v) => {
+    const l = (v.lang || '').toLowerCase().replace('_', '-')
+    return l === 'en-in' || l.startsWith('en-in') || /india/i.test(v.name)
+  })
+  if (enIn) return enIn
 
   // 3. Else any English voice
   const anyEn = voices.find((v) => (v.lang || '').toLowerCase().startsWith('en'))
@@ -964,7 +964,7 @@ export function playBase64Audio(
  * Speaks text using the browser's native SpeechSynthesis API as fallback when audio_base64 is empty.
  *
  * Rules:
- * - Preferred voice: en-IN (Indian English), else en-US, else any English
+ * - Preferred voice: en-US (American English), else en-IN, else any English
  * - getProgress: tracked from 'boundary' event charIndex, with smooth time-based estimate fallback
  * - getLevel: simulated organic speech level (0..1) while speaking; 0 when silent or stopped
  * - stop(): cancels SpeechSynthesis immediately
@@ -1105,7 +1105,7 @@ export function speakWithBrowserTTS(text: string): AudioPlayback {
       utterance.voice = preferredVoice
       utterance.lang = preferredVoice.lang
     } else {
-      utterance.lang = 'en-IN'
+      utterance.lang = 'en-US'
     }
     utterance.rate = 1.0
     utterance.pitch = 1.0
