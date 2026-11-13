@@ -115,10 +115,25 @@ def _mock_repo_index(github_url: str) -> RepoIndex:
         "    return chunks\n"
     )
 
+    readme_code = (
+        f"# {repo_name}\n\n"
+        "AST-grounded retrieval and cosine reranking service.\n\n"
+        "## Modules\n"
+        "- `src/retrieval/scorer.py` — Thresholded cosine similarity reranker\n"
+        "- `src/ingestion/chunker.py` — Sliding-window token chunker\n\n"
+        "Click **Start Viva** on the right panel when you are ready for Question 1.\n"
+    )
+
     return RepoIndex(
         repo_name=repo_name,
         github_url=github_url,
         files=[
+            RepoFile(
+                path="README.md",
+                content=readme_code,
+                language="markdown",
+                line_count=len(readme_code.splitlines()),
+            ),
             RepoFile(
                 path="src/retrieval/scorer.py",
                 content=scorer_code,
@@ -501,6 +516,31 @@ async def ingest_repo(req: IngestRepoRequest) -> IngestResponse:
         github_url=req.github_url.strip(),
         use_demo_cache=req.use_demo_cache,
     )
+
+    # Ensure README.md is included in the file tree if present in the cloned repo
+    if repo_index.local_path and not any(
+        f.path.lower() == "readme.md" for f in repo_index.files
+    ):
+        from pathlib import Path
+
+        local_root = Path(repo_index.local_path)
+        for candidate_name in ("README.md", "readme.md", "Readme.md"):
+            readme_path = local_root / candidate_name
+            if readme_path.is_file():
+                try:
+                    readme_text = readme_path.read_text(encoding="utf-8", errors="replace")[:50_000]
+                    repo_index.files.insert(
+                        0,
+                        RepoFile(
+                            path=candidate_name,
+                            content=readme_text,
+                            language="markdown",
+                            line_count=len(readme_text.splitlines()),
+                        ),
+                    )
+                except OSError:
+                    pass
+                break
 
     initial_turn = start_session(
         mode="repo",

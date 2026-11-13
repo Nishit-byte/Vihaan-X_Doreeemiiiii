@@ -73,7 +73,9 @@ function Tree({ node, depth, active, open, toggle, select }: {
 export default function IdeWorkspace({ sessionId, files: initial, highlight, incomingChallenge, onRunResult, emptyHint }: Props) {
   const [files, setFiles] = useState(initial)
   const [buffers, setBuffers] = useState<Record<string, string>>({})
-  const [active, setActive] = useState(initial[0]?.path ?? '')
+  const [active, setActive] = useState(
+    () => initial.find(f => f.path.toLowerCase() === 'readme.md')?.path ?? initial[0]?.path ?? '',
+  )
   const [open, setOpen] = useState<Set<string>>(() => new Set(initial.map(f => f.path.split('/').slice(0, -1).join('/')).filter(Boolean)))
   const [mounted, setMounted] = useState(false)
   const [challenge, setChallenge] = useState<CodingChallenge | null>(null)
