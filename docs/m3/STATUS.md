@@ -10,7 +10,7 @@ Build: not started / in progress / ready for review. Review: — / PASS / FAIL (
 | A2 | A    | TTS service | done | PASS | m3(A2) | edge-tts + ElevenLabs fallback, LRU 128 |
 | A3 | A    | Audio utils + filler cache | done | PASS | m3(A3) | Fillers 15-23 KB each; stereo/8-bit trim safe |
 | A4 | A    | STT service | done | PASS | m3(A4) | Groq Whisper, bounded retry, whole-transcript hallucination filter |
-| A5 | A    | voice_router + dev_server | not started | — | — | |
+| A5 | A    | voice_router + dev_server | done | PASS | m3(A5) | JSON-only router; mock turn server w/ per-session state; reviewer fixed empty-audio+text edge |
 | A6 | A    | Self-test + hardening | not started | — | — | |
 | B1 | B    | Recon, dev harness, stubs | done | PASS | 3daec1a | Mode (a); http://localhost:5173/examiner-dev.html |
 | B2 | B    | Push-to-talk recorder | done | PASS | m3(B2) | 3 reviewer fixes (keyup/blur/enabled stuck-recording); B6: avoid 2 hook instances binding Space |
