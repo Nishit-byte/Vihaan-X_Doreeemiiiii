@@ -1,0 +1,34 @@
+{
+  "repository_url": "demo://vivavoce/sample_repo",
+  "repo_path": "",
+  "files": [
+    "loader.py",
+    "analysis.py",
+    "config.py"
+  ],
+  "file_stats": [
+    {"file_path": "loader.py", "line_count": 13, "import_frequency": 1, "rank_score": 33},
+    {"file_path": "analysis.py", "line_count": 15, "import_frequency": 0, "rank_score": 15},
+    {"file_path": "config.py", "line_count": 9, "import_frequency": 0, "rank_score": 9}
+  ],
+  "functions": [
+    {"file_path": "loader.py", "name": "load_records", "args": ["path"], "docstring": "Return records from a JSON object containing a records field.", "line_start": 9, "line_end": 13},
+    {"file_path": "analysis.py", "name": "count_records", "args": ["path"], "docstring": "Count rows in a records file.", "line_start": 6, "line_end": 8},
+    {"file_path": "analysis.py", "name": "average_score", "args": ["path"], "docstring": "Return the mean score, or zero when there are no records.", "line_start": 10, "line_end": 15},
+    {"file_path": "config.py", "name": "normalize_name", "args": ["name"], "docstring": "Normalize a display name for stable lookups.", "line_start": 7, "line_end": 9}
+  ],
+  "constants": [
+    {"file_path": "loader.py", "name": "ENCODING", "value": "utf-8", "line_start": 6, "line_end": 6},
+    {"file_path": "config.py", "name": "MAX_RECORDS", "value": 500, "line_start": 3, "line_end": 3},
+    {"file_path": "config.py", "name": "DEFAULT_SCORE", "value": 0.0, "line_start": 4, "line_end": 4}
+  ],
+  "authors": {
+    "Demo Author A": [
+      {"file_path": "loader.py", "line_start": 1, "line_end": 13, "symbol_name": "load_records", "commit_count": 2},
+      {"file_path": "config.py", "line_start": 1, "line_end": 9, "symbol_name": "normalize_name", "commit_count": 1}
+    ],
+    "Demo Author B": [
+      {"file_path": "analysis.py", "line_start": 1, "line_end": 15, "symbol_name": "average_score", "commit_count": 3}
+    ]
+  }
+}
