@@ -433,14 +433,30 @@ function ExaminerDevHarness() {
   const paramState = queryParams?.get('state') as PanelState | null
 
   const [turnIndex, setTurnIndex] = useState(paramTurn)
+  const turnIndexRef = useRef(turnIndex)
+  turnIndexRef.current = turnIndex
+
   const [currentTurn, setCurrentTurn] = useState<TurnResponse>(MOCK_TURNS[paramTurn])
   const [history, setHistory] = useState<TurnResponse[]>(MOCK_TURNS.slice(0, paramTurn + 1))
   const [forcedState, setForcedState] = useState<PanelState | undefined>(paramState ?? undefined)
-  const [simulatedDelayMs, setSimulatedDelayMs] = useState(400)
+  const [simulatedDelayMs, setSimulatedDelayMs] = useState(900)
+  const simulatedDelayMsRef = useRef(simulatedDelayMs)
+  simulatedDelayMsRef.current = simulatedDelayMs
+
+  // Single unified failure simulation state & ref (single source of truth)
+  const [simulateFailure, setSimulateFailure] = useState(false)
+  const simulateFailureRef = useRef(false)
+  simulateFailureRef.current = simulateFailure
+
+  const handleToggleFailure = useCallback((checked: boolean) => {
+    simulateFailureRef.current = checked
+    setSimulateFailure(checked)
+    logAction(`Simulate failure set to: ${checked ? 'ON' : 'OFF'}`)
+  }, [])
   const [debugDrawerOpen, setDebugDrawerOpen] = useState(false)
   const [actionLog, setActionLog] = useState<string[]>([
     'Dev harness mounted. Initial Turn 1 loaded.',
-    'Task B2 audio recorder initialized. Mic stream standing by.',
+    'Task B6 autonomous turn-flow wired to ExaminerPanel.',
   ])
   const [, startTransition] = useTransition()
 
@@ -508,10 +524,11 @@ function ExaminerDevHarness() {
     ])
   }
 
-  // Hook instance under test (Task B2)
+  // Hook instance under test (Task B2 debug box)
+  // IMPORTANT (from B2 review & B6 spec): bindSpacebar: false so pressing Space does not start two recordings!
   const recorder = usePushToTalkRecorder({
     enabled: true,
-    bindSpacebar: true,
+    bindSpacebar: false,
     minDurationMs: 300,
     maxDurationMs: 60000,
     onRecordingComplete: (rec) => {
@@ -552,6 +569,7 @@ function ExaminerDevHarness() {
 
   const goToTurn = (index: number) => {
     const clamped = Math.max(0, Math.min(index, MOCK_TURNS.length - 1))
+    turnIndexRef.current = clamped
     setTurnIndex(clamped)
     setCurrentTurn(MOCK_TURNS[clamped])
     setHistory(MOCK_TURNS.slice(0, clamped + 1))
@@ -658,43 +676,67 @@ function ExaminerDevHarness() {
     }, 200)
   }
 
-  // ExaminerPanel callbacks
-  const handleMockAudioSubmit = async (
+  // ExaminerPanel callbacks with B6 simulated 900ms delay & optional failure
+  // Wrapped in useCallback with stable references; reads simulateFailureRef & turnIndexRef via refs
+  const handleMockAudioSubmit = useCallback(async (
     rec: RecordedAudio
   ): Promise<TurnResponse> => {
     logAction(`onSubmitAudio: ${rec.durationMs}ms, ${rec.mimeType}, size=${rec.base64.length}b64`)
-    if (simulatedDelayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, simulatedDelayMs))
+    const delay = simulatedDelayMsRef.current
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay))
     }
-    const nextIdx = Math.min(turnIndex + 1, MOCK_TURNS.length - 1)
+    if (simulateFailureRef.current) {
+      logAction('❌ Simulated submission failure triggered (500 Error)')
+      throw new Error('Simulated network error: POST /api/viva/turn failed (500)')
+    }
+    const currentIdx = turnIndexRef.current
+    const nextIdx = Math.min(currentIdx + 1, MOCK_TURNS.length - 1)
     const next = MOCK_TURNS[nextIdx]
+    turnIndexRef.current = nextIdx
     startTransition(() => {
       setTurnIndex(nextIdx)
       setCurrentTurn(next)
       setHistory(MOCK_TURNS.slice(0, nextIdx + 1))
     })
     return next
-  }
+  }, [])
 
-  const handleMockTextSubmit = async (
+  const handleMockTextSubmit = useCallback(async (
     text: string
   ): Promise<TurnResponse> => {
     logAction(`onSubmitText: "${text}"`)
-    if (simulatedDelayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, simulatedDelayMs))
+    const delay = simulatedDelayMsRef.current
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay))
     }
-    const nextIdx = Math.min(turnIndex + 1, MOCK_TURNS.length - 1)
+    if (simulateFailureRef.current) {
+      logAction('❌ Simulated submission failure triggered (500 Error)')
+      throw new Error('Simulated network error: POST /api/viva/turn failed (500)')
+    }
+    const currentIdx = turnIndexRef.current
+    const nextIdx = Math.min(currentIdx + 1, MOCK_TURNS.length - 1)
     const next = MOCK_TURNS[nextIdx]
+    turnIndexRef.current = nextIdx
     startTransition(() => {
       setTurnIndex(nextIdx)
       setCurrentTurn(next)
       setHistory(MOCK_TURNS.slice(0, nextIdx + 1))
     })
     return next
-  }
+  }, [])
 
   const handleTurnUpdate = (turn: TurnResponse) => {
     logAction(`onTurn callback: L${turn.depth_level} - ${turn.topic}`)
+    setCurrentTurn(turn)
+    const idx = MOCK_TURNS.findIndex(
+      (t) => t.topic === turn.topic && t.depth_level === turn.depth_level
+    )
+    if (idx !== -1) {
+      turnIndexRef.current = idx
+      setTurnIndex(idx)
+      setHistory(MOCK_TURNS.slice(0, idx + 1))
+    }
   }
 
   const handleRequestReport = () => {
@@ -722,11 +764,28 @@ function ExaminerDevHarness() {
             examiner-dev.html (M3 Lane B)
           </span>
           <span className="hidden sm:inline text-muted-fog text-[11px]">
-            Task B5 Voice Orb Active
+            Task B6 Turn-Flow Active
           </span>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
+          {/* Quick Simulate Failure Toggle */}
+          <div className="flex items-center gap-1.5 text-[11px] text-red-300 font-medium bg-red-950/60 px-2 py-0.5 rounded border border-red-700/60 select-none">
+            <input
+              id="header-simulate-failure-checkbox"
+              type="checkbox"
+              checked={simulateFailure}
+              onChange={(e) => {
+                const checked = e.target.checked
+                handleToggleFailure(checked)
+                e.currentTarget.blur()
+              }}
+              className="accent-red-500 rounded cursor-pointer"
+            />
+            <label htmlFor="header-simulate-failure-checkbox" className="cursor-pointer">
+              Simulate Failure
+            </label>
+          </div>
           {/* Quick B5 Orb State Switcher */}
           <div className="flex items-center gap-1 bg-void-canvas px-2 py-0.5 rounded border border-steel-outline text-xs">
             <span className="text-muted-fog text-[10px] font-semibold uppercase tracking-wider">Orb State:</span>
@@ -882,7 +941,7 @@ function ExaminerDevHarness() {
             initialTurn={currentTurn}
             history={history}
             forceState={forcedState}
-            levelSource={getActiveOrbLevel}
+            levelSource={orbLevelMode === 'fake' ? getActiveOrbLevel : undefined}
             onSubmitAudio={handleMockAudioSubmit}
             onSubmitText={handleMockTextSubmit}
             onTurn={handleTurnUpdate}
@@ -905,10 +964,27 @@ function ExaminerDevHarness() {
               🛠️ M3 Voice Pipeline — Dev Test Controls
             </span>
             <span className="px-2 py-0.5 rounded text-[10px] font-mono text-nuxt-signal bg-deep-slate border border-steel-outline">
-              Task B5 Active
+              Task B6 Active
             </span>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-1.5 text-xs text-red-300 hover:text-red-200 font-medium bg-red-950/40 px-2 py-1 rounded border border-red-800/60 select-none">
+              <input
+                id="dev-simulate-failure-checkbox"
+                type="checkbox"
+                checked={simulateFailure}
+                onChange={(e) => {
+                  const checked = e.target.checked
+                  handleToggleFailure(checked)
+                  e.currentTarget.blur()
+                }}
+                className="accent-red-500 rounded cursor-pointer"
+              />
+              <label htmlFor="dev-simulate-failure-checkbox" className="cursor-pointer">
+                Simulate submit failure (tests Retry)
+              </label>
+            </div>
+            <div className="h-4 w-px bg-steel-outline" />
             <label className="flex items-center gap-1.5 text-xs text-muted-fog cursor-pointer">
               <input
                 type="checkbox"
@@ -927,7 +1003,8 @@ function ExaminerDevHarness() {
             >
               <option value={0}>0ms (Instant)</option>
               <option value={400}>400ms (Fast)</option>
-              <option value={1000}>1000ms (Typical Voice)</option>
+              <option value={900}>900ms (Spec default)</option>
+              <option value={1500}>1500ms (Voice pipeline)</option>
               <option value={2500}>2500ms (Full LLM)</option>
             </select>
           </div>
