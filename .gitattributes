@@ -1,0 +1,2 @@
+# Keep the generated demo paper bytes unchanged across checkout platforms.
+backend/demo_cache/sample_paper.pdf binary
