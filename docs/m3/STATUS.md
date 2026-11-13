@@ -12,8 +12,8 @@ Build: not started / in progress / ready for review. Review: — / PASS / FAIL (
 | A4 | A    | STT service | not started | — | — | |
 | A5 | A    | voice_router + dev_server | not started | — | — | |
 | A6 | A    | Self-test + hardening | not started | — | — | |
-| B1 | B    | Recon, dev harness, stubs | done | PASS | 8ac3912 | Mode (a); http://localhost:5173/examiner-dev.html |
-| B2 | B    | Push-to-talk recorder | not started | — | — | |
+| B1 | B    | Recon, dev harness, stubs | done | PASS | 3daec1a | Mode (a); http://localhost:5173/examiner-dev.html |
+| B2 | B    | Push-to-talk recorder | done | PASS | m3(B2) | 3 reviewer fixes (keyup/blur/enabled stuck-recording); B6: avoid 2 hook instances binding Space |
 | B3 | B    | Playback + browser TTS | not started | — | — | |
 | B4 | B    | Panel static layout | not started | — | — | |
 | B5 | B    | Voice orb | not started | — | — | |
