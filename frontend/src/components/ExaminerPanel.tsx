@@ -1,11 +1,11 @@
 /**
- * M3 Voice Pipeline — ExaminerPanel Component (Task B4)
+ * M3 Voice Pipeline — ExaminerPanel Component (Tasks B4 & B5)
  *
- * Implements the visual panel layout per CONTEXT §5.9 & TASKS B4:
+ * Implements the visual panel layout and real-time VoiceOrb animation:
  * - Sub-components (all in this file):
  *     1. ExaminerHeader (title + reactive status pill)
  *     2. DepthMeter (L1 Recall, L2 Comprehension, L3 Analysis, L4 Evaluation with animated highlight)
- *     3. VoiceOrbPlaceholder (centered state-reactive orb with glow / ring effects)
+ *     3. VoiceOrb (Task B5: Canvas with devicePixelRatio scaling, requestAnimationFrame, smoothed scale, per-state visuals)
  *     4. QuestionCard (topic chip, depth chip, muted ack_text, bold question_text, aria-live='polite')
  *     5. DoneCard ('Viva complete' + 'View report' button -> onRequestReport)
  *     6. TranscriptHistory (collapsible, question + student transcript + verdict badge)
@@ -19,13 +19,20 @@
  * - Retains full backward compatibility with M4 App.tsx props.
  */
 
-import React, { useId, useMemo, useRef, useState } from 'react'
+import React, { useId, useMemo, useRef, useState, useEffect } from 'react'
 import type { TurnResponse, Verdict } from '../types/api'
 import type { RecordedAudio } from '../services/audioRecorder'
 
 export type ExaminerTurnLike = TurnResponse
 
 export type PanelState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'done'
+
+export interface VoiceOrbProps {
+  state: PanelState
+  levelSource?: () => number
+  size?: number
+  className?: string
+}
 
 export interface ExaminerPanelProps {
   // CONTEXT §5.9 contract
@@ -45,8 +52,9 @@ export interface ExaminerPanelProps {
   busy?: boolean
   onStartViva?: () => void
 
-  // Testing & dev-harness state override
+  // Testing & dev-harness state overrides
   forceState?: PanelState
+  levelSource?: () => number
 }
 
 // Cognitive depth levels per Bloom's ladder
@@ -184,78 +192,555 @@ function DepthMeter({ currentDepth }: { currentDepth: number }) {
 }
 
 /**
- * 3. Voice Orb Placeholder (Stub for B5)
- * Reactive visual styling according to panel state (idle, listening, thinking, speaking, done).
+ * 3. VoiceOrb (Task B5)
+ * Real-time reactive voice visualization using HTML5 Canvas:
+ * - High-DPI support with devicePixelRatio scaling
+ * - Smoothed level scale: 1 + level * 0.35 (lerp)
+ * - Per-state visuals:
+ *     - idle: slow breathing slate/indigo
+ *     - listening: emerald reacting to mic level
+ *     - thinking: amber rotating dashed ring
+ *     - speaking: indigo/violet ripples reacting to playback level
+ *     - done: calm static emerald with checkmark
+ * - Zero React state updates per frame (100% rAF canvas rendering)
+ * - Loop cleanly cancelled on unmount
+ * - Accessibility: prefers-reduced-motion renders static state orb with no rAF overhead
  */
-function VoiceOrbPlaceholder({
+function drawIdleOrb(
+  ctx: CanvasRenderingContext2D,
+  time: number,
+  cx: number,
+  cy: number,
+  baseRadius: number,
+  size: number
+) {
+  // Slow breathing slate / indigo: period ~3.5s
+  const breath = Math.sin(time * 0.0018) * 0.06
+  const r = baseRadius * (1 + breath)
+
+  // Soft ambient outer halo
+  const halo = ctx.createRadialGradient(cx, cy, r * 0.6, cx, cy, r * 1.55)
+  halo.addColorStop(0, 'rgba(99, 102, 241, 0.22)')
+  halo.addColorStop(0.5, 'rgba(71, 85, 105, 0.12)')
+  halo.addColorStop(1, 'rgba(15, 23, 42, 0)')
+  ctx.fillStyle = halo
+  ctx.beginPath()
+  ctx.arc(cx, cy, r * 1.55, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Faint orbital ring
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.arc(cx, cy, r * 1.35, 0, Math.PI * 2)
+  ctx.stroke()
+
+  // Core gradient: slate & indigo
+  const core = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 0.1, cx, cy, r)
+  core.addColorStop(0, '#6366f1') // indigo-500
+  core.addColorStop(0.45, '#3730a3') // indigo-800
+  core.addColorStop(1, '#0f172a') // slate-900
+  ctx.fillStyle = core
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Core border
+  ctx.strokeStyle = 'rgba(129, 140, 248, 0.5)'
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+
+  // Soft specular highlight
+  ctx.beginPath()
+  ctx.arc(cx - r * 0.28, cy - r * 0.28, r * 0.22, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.14)'
+  ctx.fill()
+}
+
+function drawListeningOrb(
+  ctx: CanvasRenderingContext2D,
+  smoothedLevel: number,
+  scale: number,
+  cx: number,
+  cy: number,
+  baseRadius: number,
+  size: number
+) {
+  // Emerald reacting to mic level
+  const r = baseRadius * scale
+  const maxR = size / 2 - 3
+
+  // Dynamic outer reactive shockwaves
+  const wave1 = Math.min(maxR, baseRadius * (scale + 0.22 + smoothedLevel * 0.25))
+  const a1 = Math.min(0.85, 0.25 + smoothedLevel * 0.55)
+  ctx.strokeStyle = `rgba(0, 220, 130, ${a1})`
+  ctx.lineWidth = 1.8 + smoothedLevel * 1.5
+  ctx.beginPath()
+  ctx.arc(cx, cy, wave1, 0, Math.PI * 2)
+  ctx.stroke()
+
+  if (smoothedLevel > 0.05) {
+    const wave2 = Math.min(maxR, baseRadius * (scale + 0.48 + smoothedLevel * 0.3))
+    const a2 = Math.min(0.6, 0.1 + smoothedLevel * 0.35)
+    ctx.strokeStyle = `rgba(0, 220, 130, ${a2})`
+    ctx.lineWidth = 1.2
+    ctx.beginPath()
+    ctx.arc(cx, cy, wave2, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+
+  // Ambient emerald glow
+  const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, Math.min(maxR, r * 1.6))
+  glow.addColorStop(0, `rgba(0, 220, 130, ${0.35 + smoothedLevel * 0.4})`)
+  glow.addColorStop(0.7, `rgba(5, 150, 105, ${0.15 + smoothedLevel * 0.2})`)
+  glow.addColorStop(1, 'rgba(6, 78, 59, 0)')
+  ctx.fillStyle = glow
+  ctx.beginPath()
+  ctx.arc(cx, cy, Math.min(maxR, r * 1.6), 0, Math.PI * 2)
+  ctx.fill()
+
+  // Core gradient: emerald
+  const core = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 0.1, cx, cy, r)
+  core.addColorStop(0, '#34d399') // emerald-400
+  core.addColorStop(0.5, '#059669') // emerald-600
+  core.addColorStop(1, '#064e3b') // emerald-900
+  ctx.fillStyle = core
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Core border
+  ctx.strokeStyle = `rgba(52, 211, 153, ${0.7 + smoothedLevel * 0.3})`
+  ctx.lineWidth = 2 + smoothedLevel * 1.5
+  ctx.stroke()
+
+  // Specular highlight
+  ctx.beginPath()
+  ctx.arc(cx - r * 0.28, cy - r * 0.28, r * 0.22, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.22)'
+  ctx.fill()
+}
+
+function drawThinkingOrb(
+  ctx: CanvasRenderingContext2D,
+  time: number,
+  cx: number,
+  cy: number,
+  baseRadius: number,
+  size: number
+) {
+  // Amber rotating dashed ring
+  const angle = (time * 0.0024) % (Math.PI * 2)
+  const ring1R = baseRadius * 1.38
+
+  // Outer primary rotating dashed ring
+  ctx.save()
+  ctx.translate(cx, cy)
+  ctx.rotate(angle)
+  ctx.setLineDash([8, 6])
+  ctx.strokeStyle = '#f59e0b' // amber-500
+  ctx.lineWidth = 2.4
+  ctx.beginPath()
+  ctx.arc(0, 0, ring1R, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.restore()
+
+  // Inner counter-rotating dashed accent
+  const ring2R = baseRadius * 1.18
+  ctx.save()
+  ctx.translate(cx, cy)
+  ctx.rotate(-angle * 0.65)
+  ctx.setLineDash([4, 6])
+  ctx.strokeStyle = 'rgba(251, 191, 36, 0.45)' // amber-400
+  ctx.lineWidth = 1.4
+  ctx.beginPath()
+  ctx.arc(0, 0, ring2R, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.restore()
+
+  // Core subtle pulse
+  const pulse = Math.sin(time * 0.004) * 0.035
+  const r = baseRadius * (1 + pulse)
+
+  // Ambient glow
+  const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 1.5)
+  glow.addColorStop(0, 'rgba(245, 158, 11, 0.28)')
+  glow.addColorStop(0.6, 'rgba(217, 119, 6, 0.12)')
+  glow.addColorStop(1, 'rgba(120, 53, 15, 0)')
+  ctx.fillStyle = glow
+  ctx.beginPath()
+  ctx.arc(cx, cy, r * 1.5, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Core gradient: amber
+  const core = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 0.1, cx, cy, r)
+  core.addColorStop(0, '#fbbf24') // amber-400
+  core.addColorStop(0.5, '#d97706') // amber-600
+  core.addColorStop(1, '#78350f') // amber-900
+  ctx.fillStyle = core
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Core border
+  ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)'
+  ctx.lineWidth = 1.8
+  ctx.stroke()
+
+  // Specular highlight
+  ctx.beginPath()
+  ctx.arc(cx - r * 0.28, cy - r * 0.28, r * 0.22, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.18)'
+  ctx.fill()
+}
+
+function drawSpeakingOrb(
+  ctx: CanvasRenderingContext2D,
+  time: number,
+  smoothedLevel: number,
+  scale: number,
+  cx: number,
+  cy: number,
+  baseRadius: number,
+  size: number
+) {
+  // Indigo / violet ripples reacting to playback level
+  const r = baseRadius * scale
+  const maxR = size / 2 - 3
+
+  // Concentric ripples expanding outward
+  for (let w = 0; w < 3; w++) {
+    const phase = (time * 0.0016 + w * 0.333) % 1.0
+    const maxExpansion = maxR - r
+    const rippleR = r + phase * maxExpansion
+    const alpha = (1 - phase) * (0.35 + smoothedLevel * 0.55)
+    ctx.strokeStyle = `rgba(139, 92, 246, ${Math.max(0, Math.min(1, alpha))})`
+    ctx.lineWidth = 1.5 + smoothedLevel * 1.5
+    ctx.beginPath()
+    ctx.arc(cx, cy, rippleR, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+
+  // Ambient violet/indigo glow
+  const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, Math.min(maxR, r * 1.6))
+  glow.addColorStop(0, `rgba(168, 85, 247, ${0.35 + smoothedLevel * 0.45})`)
+  glow.addColorStop(0.5, `rgba(99, 102, 241, ${0.2 + smoothedLevel * 0.3})`)
+  glow.addColorStop(1, 'rgba(49, 46, 129, 0)')
+  ctx.fillStyle = glow
+  ctx.beginPath()
+  ctx.arc(cx, cy, Math.min(maxR, r * 1.6), 0, Math.PI * 2)
+  ctx.fill()
+
+  // Core gradient: violet/indigo
+  const core = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 0.1, cx, cy, r)
+  core.addColorStop(0, '#c084fc') // purple-400
+  core.addColorStop(0.4, '#818cf8') // indigo-400
+  core.addColorStop(0.8, '#4f46e5') // indigo-600
+  core.addColorStop(1, '#312e81') // indigo-900
+  ctx.fillStyle = core
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Core border
+  ctx.strokeStyle = `rgba(192, 132, 252, ${0.75 + smoothedLevel * 0.25})`
+  ctx.lineWidth = 2 + smoothedLevel * 1.5
+  ctx.stroke()
+
+  // Specular highlight
+  ctx.beginPath()
+  ctx.arc(cx - r * 0.28, cy - r * 0.28, r * 0.22, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.22)'
+  ctx.fill()
+}
+
+function drawDoneOrb(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  baseRadius: number,
+  size: number
+) {
+  // Calm static emerald orb
+  const r = baseRadius
+
+  // Outer serene halo
+  const halo = ctx.createRadialGradient(cx, cy, r * 0.6, cx, cy, r * 1.35)
+  halo.addColorStop(0, 'rgba(0, 220, 130, 0.25)')
+  halo.addColorStop(0.6, 'rgba(5, 150, 105, 0.1)')
+  halo.addColorStop(1, 'rgba(6, 78, 59, 0)')
+  ctx.fillStyle = halo
+  ctx.beginPath()
+  ctx.arc(cx, cy, r * 1.35, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Calm border ring
+  ctx.strokeStyle = 'rgba(0, 220, 130, 0.4)'
+  ctx.lineWidth = 1.2
+  ctx.beginPath()
+  ctx.arc(cx, cy, r * 1.22, 0, Math.PI * 2)
+  ctx.stroke()
+
+  // Core gradient: emerald
+  const core = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 0.1, cx, cy, r)
+  core.addColorStop(0, '#34d399')
+  core.addColorStop(0.5, '#059669')
+  core.addColorStop(1, '#064e3b')
+  ctx.fillStyle = core
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Core border
+  ctx.strokeStyle = 'rgba(0, 220, 130, 0.8)'
+  ctx.lineWidth = 2
+  ctx.stroke()
+
+  // Calm white checkmark
+  ctx.beginPath()
+  ctx.moveTo(cx - r * 0.25, cy + r * 0.02)
+  ctx.lineTo(cx - r * 0.04, cy + r * 0.23)
+  ctx.lineTo(cx + r * 0.29, cy - r * 0.19)
+  ctx.strokeStyle = '#ffffff'
+  ctx.lineWidth = 2.4
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.stroke()
+}
+
+function drawStaticOrb(
+  ctx: CanvasRenderingContext2D,
+  state: PanelState,
+  cx: number,
+  cy: number,
+  baseRadius: number,
+  size: number
+) {
+  const r = baseRadius
+
+  switch (state) {
+    case 'listening': {
+      // Static emerald
+      const ring = baseRadius * 1.25
+      ctx.strokeStyle = 'rgba(0, 220, 130, 0.4)'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(cx, cy, ring, 0, Math.PI * 2)
+      ctx.stroke()
+
+      const core = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 0.1, cx, cy, r)
+      core.addColorStop(0, '#34d399')
+      core.addColorStop(0.5, '#059669')
+      core.addColorStop(1, '#064e3b')
+      ctx.fillStyle = core
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, 0, Math.PI * 2)
+      ctx.fill()
+
+      ctx.strokeStyle = 'rgba(52, 211, 153, 0.8)'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      break
+    }
+    case 'thinking': {
+      // Static amber with static dashed ring
+      ctx.save()
+      ctx.setLineDash([8, 6])
+      ctx.strokeStyle = '#f59e0b'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(cx, cy, baseRadius * 1.35, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+
+      const core = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 0.1, cx, cy, r)
+      core.addColorStop(0, '#fbbf24')
+      core.addColorStop(0.5, '#d97706')
+      core.addColorStop(1, '#78350f')
+      ctx.fillStyle = core
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, 0, Math.PI * 2)
+      ctx.fill()
+
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      break
+    }
+    case 'speaking': {
+      // Static indigo / violet with static outer ring
+      ctx.strokeStyle = 'rgba(139, 92, 246, 0.4)'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(cx, cy, baseRadius * 1.28, 0, Math.PI * 2)
+      ctx.stroke()
+
+      const core = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 0.1, cx, cy, r)
+      core.addColorStop(0, '#c084fc')
+      core.addColorStop(0.4, '#818cf8')
+      core.addColorStop(0.8, '#4f46e5')
+      core.addColorStop(1, '#312e81')
+      ctx.fillStyle = core
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, 0, Math.PI * 2)
+      ctx.fill()
+
+      ctx.strokeStyle = 'rgba(192, 132, 252, 0.8)'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      break
+    }
+    case 'done': {
+      drawDoneOrb(ctx, cx, cy, baseRadius, size)
+      break
+    }
+    case 'idle':
+    default: {
+      // Static slate / indigo
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.3)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.arc(cx, cy, r * 1.25, 0, Math.PI * 2)
+      ctx.stroke()
+
+      const core = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 0.1, cx, cy, r)
+      core.addColorStop(0, '#6366f1')
+      core.addColorStop(0.45, '#3730a3')
+      core.addColorStop(1, '#0f172a')
+      ctx.fillStyle = core
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, 0, Math.PI * 2)
+      ctx.fill()
+
+      ctx.strokeStyle = 'rgba(129, 140, 248, 0.5)'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+      break
+    }
+  }
+}
+
+export function VoiceOrb({
   state,
-  isListeningActive,
-}: {
-  state: PanelState
-  isListeningActive: boolean
-}) {
-  const effectiveVisual = isListeningActive ? 'listening' : state
+  levelSource,
+  size = 120,
+  className = '',
+}: VoiceOrbProps): JSX.Element {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const stateRef = useRef(state)
+  stateRef.current = state
+  const levelSourceRef = useRef(levelSource)
+  levelSourceRef.current = levelSource
+
+  // Track prefers-reduced-motion
+  const [isReducedMotion, setIsReducedMotion] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  })
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const handleChange = (e: MediaQueryListEvent) => {
+      setIsReducedMotion(e.matches)
+    }
+    mediaQuery.addEventListener('change', handleChange)
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+    canvas.width = Math.round(size * dpr)
+    canvas.height = Math.round(size * dpr)
+    canvas.style.width = `${size}px`
+    canvas.style.height = `${size}px`
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    let animId: number
+    let smoothedLevel = 0
+
+    const drawFrame = (time: number) => {
+      ctx.save()
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.clearRect(0, 0, size, size)
+
+      const currentState = stateRef.current
+      const rawLevel = levelSourceRef.current ? levelSourceRef.current() : 0
+      const targetLevel = Math.max(0, Math.min(1, isNaN(rawLevel) ? 0 : rawLevel))
+
+      // Smoothed scale per spec: 1 + level * 0.35 (lerp factor ~0.18)
+      smoothedLevel += (targetLevel - smoothedLevel) * 0.18
+      const scale = 1 + smoothedLevel * 0.35
+
+      const cx = size / 2
+      const cy = size / 2
+      const baseRadius = size * 0.26
+
+      if (isReducedMotion) {
+        // Static rendering for prefers-reduced-motion
+        drawStaticOrb(ctx, currentState, cx, cy, baseRadius, size)
+      } else {
+        // Dynamic per-state animations
+        switch (currentState) {
+          case 'idle':
+            drawIdleOrb(ctx, time, cx, cy, baseRadius, size)
+            break
+          case 'listening':
+            drawListeningOrb(ctx, smoothedLevel, scale, cx, cy, baseRadius, size)
+            break
+          case 'thinking':
+            drawThinkingOrb(ctx, time, cx, cy, baseRadius, size)
+            break
+          case 'speaking':
+            drawSpeakingOrb(ctx, time, smoothedLevel, scale, cx, cy, baseRadius, size)
+            break
+          case 'done':
+            drawDoneOrb(ctx, cx, cy, baseRadius, size)
+            break
+        }
+      }
+
+      ctx.restore()
+    }
+
+    if (isReducedMotion || state === 'done') {
+      // Draw single static frame without animation loop (done orb is static)
+      drawFrame(0)
+    } else {
+      // Run continuous rAF loop
+      let isMounted = true
+      const loop = (time: number) => {
+        if (!isMounted) return
+        drawFrame(time)
+        animId = requestAnimationFrame(loop)
+      }
+      animId = requestAnimationFrame(loop)
+
+      return () => {
+        isMounted = false
+        if (animId) cancelAnimationFrame(animId)
+      }
+    }
+  }, [state, size, isReducedMotion])
 
   return (
-    <div className="shrink-0 flex flex-col items-center justify-center py-2">
-      <div className="relative flex h-20 w-20 items-center justify-center">
-        {/* Outer Halo / Ring depending on state */}
-        <div
-          className={`absolute inset-0 rounded-full transition-all duration-500 ease-out ${
-            effectiveVisual === 'listening'
-              ? 'bg-red-500/20 ring-2 ring-red-500 shadow-[0_0_24px_rgba(239,68,68,0.4)] animate-pulse'
-              : effectiveVisual === 'thinking'
-              ? 'bg-amber-500/15 ring-2 ring-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.3)] animate-spin [animation-duration:8s]'
-              : effectiveVisual === 'speaking'
-              ? 'bg-indigo-500/25 ring-2 ring-indigo-400 shadow-[0_0_24px_rgba(129,140,248,0.4)] animate-pulse'
-              : effectiveVisual === 'done'
-              ? 'bg-emerald-500/20 ring-2 ring-nuxt-signal shadow-[0_0_20px_rgba(0,220,130,0.4)]'
-              : 'bg-deep-slate ring-1 ring-steel-outline shadow-inner'
-          }`}
-        />
-
-        {/* Inner Core */}
-        <div
-          className={`relative z-10 flex h-14 w-14 items-center justify-center rounded-full border transition-all duration-300 ${
-            effectiveVisual === 'listening'
-              ? 'bg-red-950 border-red-500 text-red-200'
-              : effectiveVisual === 'thinking'
-              ? 'bg-amber-950 border-amber-500 text-amber-200'
-              : effectiveVisual === 'speaking'
-              ? 'bg-indigo-950 border-indigo-400 text-indigo-200'
-              : effectiveVisual === 'done'
-              ? 'bg-emerald-950 border-nuxt-signal text-nuxt-signal'
-              : 'bg-midnight-panel border-steel-outline text-muted-fog'
-          }`}
-        >
-          {effectiveVisual === 'listening' ? (
-            <span className="text-xl">🎙️</span>
-          ) : effectiveVisual === 'thinking' ? (
-            <span className="text-xl">⚙️</span>
-          ) : effectiveVisual === 'speaking' ? (
-            <span className="text-xl">🔊</span>
-          ) : effectiveVisual === 'done' ? (
-            <span className="text-xl font-bold">✓</span>
-          ) : (
-            <span className="text-xs font-mono font-semibold text-pale-frost">
-              VOICE
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Status subtext */}
-      <span className="mt-1 text-[11px] text-muted-fog">
-        {effectiveVisual === 'listening'
-          ? 'Listening to student response…'
-          : effectiveVisual === 'thinking'
-          ? 'Evaluating response against rubric…'
-          : effectiveVisual === 'speaking'
-          ? 'Examiner speaking…'
-          : effectiveVisual === 'done'
-          ? 'Viva complete'
-          : 'Hold Space to answer'}
-      </span>
+    <div
+      className={`relative flex items-center justify-center shrink-0 ${className}`}
+      style={{ width: size, height: size }}
+    >
+      <canvas
+        ref={canvasRef}
+        role="img"
+        aria-label={`Examiner voice orb (${state})`}
+        className="block"
+      />
     </div>
   )
 }
@@ -645,6 +1130,7 @@ export default function ExaminerPanel({
   busy = false,
   onStartViva,
   forceState,
+  levelSource,
 }: ExaminerPanelProps) {
   // Active turn: supports both initialTurn (M3 harness) and turn (M4 App.tsx)
   const activeTurn = initialTurn ?? turn ?? null
@@ -717,11 +1203,25 @@ export default function ExaminerPanel({
       {/* 2. Depth Meter (L1..L4) */}
       <DepthMeter currentDepth={currentDepth} />
 
-      {/* 3. Voice Orb Placeholder */}
-      <VoiceOrbPlaceholder
-        state={panelState}
-        isListeningActive={isPressed}
-      />
+      {/* 3. Voice Orb */}
+      <div className="shrink-0 flex flex-col items-center justify-center py-1">
+        <VoiceOrb
+          state={panelState}
+          levelSource={levelSource ?? (isPressed ? () => 0.6 : () => 0)}
+          size={120}
+        />
+        <span className="mt-0.5 text-[11px] text-muted-fog">
+          {panelState === 'listening'
+            ? 'Listening to student response…'
+            : panelState === 'thinking'
+            ? 'Evaluating response against rubric…'
+            : panelState === 'speaking'
+            ? 'Examiner speaking…'
+            : panelState === 'done'
+            ? 'Viva complete'
+            : 'Hold Space to answer'}
+        </span>
+      </div>
 
       {/* 4. QuestionCard OR DoneCard */}
       {panelState === 'done' || activeTurn?.done ? (
