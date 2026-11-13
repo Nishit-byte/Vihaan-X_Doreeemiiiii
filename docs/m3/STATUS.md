@@ -8,7 +8,7 @@ Build: not started / in progress / ready for review. Review: — / PASS / FAIL (
 | S0 | —    | Docs setup + repo scan | done | — | — | |
 | A1 | A    | Voice scaffold, config & deps | done | PASS | 3daec1a | Stubs only; routes in A5 |
 | A2 | A    | TTS service | done | PASS | m3(A2) | edge-tts + ElevenLabs fallback, LRU 128 |
-| A3 | A    | Audio utils + filler cache | not started | — | — | |
+| A3 | A    | Audio utils + filler cache | done | PASS | m3(A3) | Fillers 15-23 KB each; stereo/8-bit trim safe |
 | A4 | A    | STT service | not started | — | — | |
 | A5 | A    | voice_router + dev_server | not started | — | — | |
 | A6 | A    | Self-test + hardening | not started | — | — | |
