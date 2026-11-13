@@ -104,4 +104,6 @@ export interface ExaminerPanelProps {
   busy: boolean
   /** Call after every successful submitTurn() so the workspaces update. */
   onTurn: (turn: TurnResponse) => void
+  /** Call when user clicks Start Viva to reveal Question 1. */
+  onStartViva?: () => void
 }

@@ -294,10 +294,12 @@ def _deterministic_repo_question(
     depth_level: int,
     verdict: VerdictType,
     code_result: Optional[RunCodeResponse] = None,
+    turn_index: int = 0,
 ) -> Dict[str, Any]:
-    """Generates an AST-grounded L1-L4 question when running in offline/fallback mode."""
+    """Generates varied, AST-grounded L1-L4 questions when running in offline/fallback mode."""
     args_str = ", ".join(symbol.args) if symbol.args else "no arguments"
     calls_str = ", ".join(symbol.calls[:3]) if symbol.calls else "internal operations"
+    consts_str = ", ".join(symbol.constants[:2]) if symbol.constants else "local defaults"
 
     if code_result is not None:
         if code_result.passed:
@@ -315,30 +317,64 @@ def _deterministic_repo_question(
     else:
         ack = f"Let's anchor on `{symbol.name}` at lines {symbol.line_start} to {symbol.line_end}."
 
-    if depth_level == 1:
-        q = (
-            f"Looking at `{symbol.name}({args_str})` in `{symbol.file_path}` on lines {symbol.line_start} to {symbol.line_end}, "
-            f"what is the exact role of this function and how does it transform its inputs before calling {calls_str}?"
-        )
-        action = "DrillDown"
-    elif depth_level == 2:
-        q = (
-            f"In `{symbol.file_path}` lines {symbol.line_start} to {symbol.line_end}, why did you structure `{symbol.name}` "
-            f"with parameters `({args_str})` instead of decoupling the state transformation?"
-        )
-        action = "DrillDown" if verdict == "strong" else "Probe"
-    elif depth_level == 3:
-        q = (
-            f"At Level 3 Analysis on `{symbol.name}` (lines {symbol.line_start}-{symbol.line_end} of `{symbol.file_path}`): "
-            f"what is the worst-case time and memory complexity when input volume scales 100x, and what trade-off did you make here?"
-        )
-        action = "DrillDown" if verdict == "strong" else "Hint"
-    else:
-        q = (
-            f"Level 4 Mutation Challenge on `{symbol.name}` (`{symbol.file_path}`:{symbol.line_start}-{symbol.line_end}): "
-            f"what breaks if an empty or degenerate boundary payload reaches this block? Fix the edge-case bug in the IDE and click Run & Verify."
-        )
-        action = "TriggerCodeChallenge"
+    variants: Dict[int, List[str]] = {
+        1: [
+            (
+                f"Looking at `{symbol.name}({args_str})` in `{symbol.file_path}` (lines {symbol.line_start}-{symbol.line_end}), "
+                f"what is the exact role of this function and how does it transform its inputs before calling {calls_str}?"
+            ),
+            (
+                f"In `{symbol.file_path}` (lines {symbol.line_start}-{symbol.line_end}), trace what `{symbol.name}` returns "
+                f"and how `{consts_str}` influences its output."
+            ),
+            (
+                f"Walk me through the control flow inside `{symbol.name}` at `{symbol.file_path}`:{symbol.line_start}-{symbol.line_end}—"
+                f"which input parameter drives the main branch?"
+            ),
+        ],
+        2: [
+            (
+                f"In `{symbol.file_path}` lines {symbol.line_start}-{symbol.line_end}, why did you structure `{symbol.name}` "
+                f"with parameters `({args_str})` instead of decoupling the state transformation?"
+            ),
+            (
+                f"Why does `{symbol.name}` in `{symbol.file_path}` rely on {calls_str} here, and what assumption does it make about the caller's data?"
+            ),
+            (
+                f"How would `{symbol.name}` behave differently if `{consts_str}` were changed, and why was that value chosen?"
+            ),
+        ],
+        3: [
+            (
+                f"At Level 3 Analysis on `{symbol.name}` (lines {symbol.line_start}-{symbol.line_end} of `{symbol.file_path}`): "
+                f"what is the worst-case time and memory complexity when input volume scales 100x, and what trade-off did you make?"
+            ),
+            (
+                f"If `{symbol.name}` in `{symbol.file_path}` is called concurrently under heavy load, where is the bottleneck or shared-state risk?"
+            ),
+            (
+                f"Compare your implementation of `{symbol.name}` against an alternative data structure or streaming approach—what did you gain or sacrifice?"
+            ),
+        ],
+        4: [
+            (
+                f"Level 4 Mutation Challenge on `{symbol.name}` (`{symbol.file_path}`:{symbol.line_start}-{symbol.line_end}): "
+                f"what breaks if an empty or degenerate boundary payload reaches this block? Fix the edge-case bug in the IDE and click Run & Verify."
+            ),
+            (
+                f"Level 4 Edge-Case Check in `{symbol.file_path}` (`{symbol.name}`, lines {symbol.line_start}-{symbol.line_end}): "
+                f"guard against zero-length or `None` inputs in the editor and click Run & Verify to prove it passes pytest."
+            ),
+        ],
+    }
+
+    pool = variants.get(depth_level, variants[1])
+    q = pool[turn_index % len(pool)]
+    action = (
+        "TriggerCodeChallenge"
+        if depth_level == 4
+        else ("DrillDown" if verdict in ("start", "strong") else "Probe")
+    )
 
     return {
         "action": action,
@@ -357,8 +393,9 @@ def _deterministic_paper_question(
     node: PaperNode,
     depth_level: int,
     verdict: VerdictType,
+    turn_index: int = 0,
 ) -> Dict[str, Any]:
-    """Generates a concept-map grounded L1-L4 question for Paper mode."""
+    """Generates varied, concept-map grounded L1-L4 questions for Paper mode."""
     if verdict == "start":
         ack = f"Welcome to VivaVoce Paper Mode. I have mapped your paper's methodology into a visual concept graph starting at node {node.node_id}."
     elif verdict == "strong":
@@ -368,14 +405,27 @@ def _deterministic_paper_question(
     else:
         ack = f"Let's focus on the highlighted excerpt for node {node.node_id} ({node.label})."
 
-    if depth_level == 1:
-        q = f"In node {node.node_id} ({node.label}), what is the core input-to-output transformation described in this section of the paper?"
-    elif depth_level == 2:
-        q = f"Why does the methodology at node {node.node_id} ({node.label}) adopt this specific formulation rather than a standard baseline?"
-    elif depth_level == 3:
-        q = f"What are the primary computational or statistical trade-offs introduced by {node.label} ({node.node_id}), and how would an ablation study isolate its impact?"
-    else:
-        q = f"At Level 4 Evaluation for {node.node_id} ({node.label}): under what distribution shift or adversarial regime does this assumption fail, and how would you modify the architecture?"
+    variants: Dict[int, List[str]] = {
+        1: [
+            f"In node {node.node_id} ({node.label}), what is the core input-to-output transformation described in this section of the paper?",
+            f"Looking at {node.node_id} ({node.label}), what specific problem or bottleneck does this stage solve before passing data downstream?",
+        ],
+        2: [
+            f"Why does the methodology at node {node.node_id} ({node.label}) adopt this specific formulation rather than a standard baseline?",
+            f"What key mathematical or architectural assumption must hold for {node.node_id} ({node.label}) to work as intended?",
+        ],
+        3: [
+            f"What are the primary computational or statistical trade-offs introduced by {node.label} ({node.node_id}), and how would an ablation study isolate its impact?",
+            f"If you removed or simplified {node.node_id} ({node.label}), which downstream metric in the paper would degrade first and why?",
+        ],
+        4: [
+            f"At Level 4 Evaluation for {node.node_id} ({node.label}): under what distribution shift or adversarial regime does this assumption fail, and how would you modify the architecture?",
+            f"Design a stress-test or counterfactual experiment that would break {node.node_id} ({node.label})—what failure mode do you expect?",
+        ],
+    }
+
+    pool = variants.get(depth_level, variants[1])
+    q = pool[turn_index % len(pool)]
 
     return {
         "action": "DrillDown" if verdict in ("start", "strong") else "Probe",
@@ -613,6 +663,7 @@ class SessionManager:
                 depth_level=next_depth,
                 verdict=verdict,
                 code_result=code_result,
+                turn_index=len(session.turns),
             )
             ack_text = fallback["ack_text"]
             question_text = fallback["question_text"]
@@ -748,6 +799,7 @@ class SessionManager:
                 node=active_node,
                 depth_level=next_depth,
                 verdict=verdict,
+                turn_index=len(session.turns),
             )
             ack_text = fallback["ack_text"]
             question_text = fallback["question_text"]
