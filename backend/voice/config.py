@@ -40,3 +40,22 @@ FILLER_CACHE_DIR: Path = Path(os.getenv("FILLER_CACHE_DIR", str(Path(__file__).r
 # Logger
 log = logging.getLogger("vivavoce.voice")
 
+# Hardening for Windows asyncio proactor pipe transport teardown
+# Prevents noisy "RuntimeError: Event loop is closed" on unclosed transport __del__
+if os.name == "nt":
+    try:
+        from asyncio.proactor_events import _ProactorBasePipeTransport
+
+        _orig_del = _ProactorBasePipeTransport.__del__
+
+        def _silenced_del(self, *args, **kwargs):
+            try:
+                _orig_del(self, *args, **kwargs)
+            except RuntimeError:
+                pass
+
+        _ProactorBasePipeTransport.__del__ = _silenced_del
+    except Exception:
+        pass
+
+

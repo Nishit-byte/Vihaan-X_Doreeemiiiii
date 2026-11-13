@@ -64,11 +64,19 @@ def _get_api_key() -> str:
 
 
 def _get_groq_client(api_key: str) -> groq.AsyncGroq:
-    """Get or create cached AsyncGroq client for the given API key."""
+    """Get or create cached AsyncGroq client for the given API key and event loop."""
     global _client, _client_key
-    if _client is None or _client_key != api_key:
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    client_loop = getattr(_client, "_bound_loop", None) if _client else None
+    if _client is None or _client_key != api_key or (current_loop is not None and client_loop != current_loop):
         _client = groq.AsyncGroq(api_key=api_key)
         _client_key = api_key
+        if current_loop is not None:
+            setattr(_client, "_bound_loop", current_loop)
     return _client
 
 
