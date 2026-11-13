@@ -14,7 +14,7 @@
 import React, { useEffect, useRef, useState, useTransition } from 'react'
 import { createRoot } from 'react-dom/client'
 import '../index.css'
-import ExaminerPanel from '../components/ExaminerPanel'
+import ExaminerPanel, { PanelState } from '../components/ExaminerPanel'
 import { MOCK_TURNS } from './mockTurns'
 import type { TurnResponse } from '../types/api'
 import {
@@ -373,10 +373,18 @@ function PlaybackStatusPill({
 }
 
 function ExaminerDevHarness() {
-  const [turnIndex, setTurnIndex] = useState(0)
-  const [currentTurn, setCurrentTurn] = useState<TurnResponse>(MOCK_TURNS[0])
+  const queryParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
+  const paramTurn = queryParams?.get('turn')
+    ? Math.max(0, Math.min(Number(queryParams.get('turn')), MOCK_TURNS.length - 1))
+    : 0
+  const paramState = queryParams?.get('state') as PanelState | null
+
+  const [turnIndex, setTurnIndex] = useState(paramTurn)
+  const [currentTurn, setCurrentTurn] = useState<TurnResponse>(MOCK_TURNS[paramTurn])
+  const [history, setHistory] = useState<TurnResponse[]>(MOCK_TURNS.slice(0, paramTurn + 1))
+  const [forcedState, setForcedState] = useState<PanelState | undefined>(paramState ?? undefined)
   const [simulatedDelayMs, setSimulatedDelayMs] = useState(400)
-  const [debugDrawerOpen, setDebugDrawerOpen] = useState(true)
+  const [debugDrawerOpen, setDebugDrawerOpen] = useState(false)
   const [actionLog, setActionLog] = useState<string[]>([
     'Dev harness mounted. Initial Turn 1 loaded.',
     'Task B2 audio recorder initialized. Mic stream standing by.',
@@ -474,6 +482,7 @@ function ExaminerDevHarness() {
     const clamped = Math.max(0, Math.min(index, MOCK_TURNS.length - 1))
     setTurnIndex(clamped)
     setCurrentTurn(MOCK_TURNS[clamped])
+    setHistory(MOCK_TURNS.slice(0, clamped + 1))
     logAction(
       `Jumped to Turn ${clamped + 1}: L${MOCK_TURNS[clamped].depth_level} (${MOCK_TURNS[clamped].verdict})`
     )
@@ -590,6 +599,7 @@ function ExaminerDevHarness() {
     startTransition(() => {
       setTurnIndex(nextIdx)
       setCurrentTurn(next)
+      setHistory(MOCK_TURNS.slice(0, nextIdx + 1))
     })
     return next
   }
@@ -606,6 +616,7 @@ function ExaminerDevHarness() {
     startTransition(() => {
       setTurnIndex(nextIdx)
       setCurrentTurn(next)
+      setHistory(MOCK_TURNS.slice(0, nextIdx + 1))
     })
     return next
   }
@@ -639,10 +650,35 @@ function ExaminerDevHarness() {
             examiner-dev.html (M3 Lane B)
           </span>
           <span className="text-muted-fog">
-            Mode (a) scaffold • Task B2 Push-to-Talk Active
+            Mode (a) scaffold • Task B4 Layout Active
           </span>
         </div>
         <div className="flex items-center gap-3">
+          {/* B4 State Override Switcher */}
+          <div className="flex items-center gap-1 bg-void-canvas px-2 py-0.5 rounded border border-steel-outline text-xs">
+            <span className="text-muted-fog text-[10px] font-semibold uppercase tracking-wider">State:</span>
+            {(['auto', 'idle', 'listening', 'thinking', 'speaking', 'done'] as const).map((st) => (
+              <button
+                key={st}
+                type="button"
+                onClick={() => {
+                  const target = st === 'auto' ? undefined : st
+                  setForcedState(target)
+                  logAction(`Panel state forced to: ${st.toUpperCase()}`)
+                }}
+                className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition ${
+                  (st === 'auto' && forcedState === undefined) || forcedState === st
+                    ? 'bg-nuxt-signal text-void-canvas font-bold'
+                    : 'text-muted-fog hover:text-pale-frost hover:bg-deep-slate'
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
+
+          <div className="h-4 w-px bg-steel-outline" />
+
           <label className="flex items-center gap-1.5 text-xs text-muted-fog cursor-pointer">
             <input
               type="checkbox"
@@ -746,6 +782,8 @@ function ExaminerDevHarness() {
         >
           <ExaminerPanel
             initialTurn={currentTurn}
+            history={history}
+            forceState={forcedState}
             onSubmitAudio={handleMockAudioSubmit}
             onSubmitText={handleMockTextSubmit}
             onTurn={handleTurnUpdate}
@@ -1120,6 +1158,33 @@ function ExaminerDevHarness() {
               <p className="mt-1 text-[10px] text-muted-fog">
                 Topic: <strong className="text-pale-frost">{currentTurn.topic}</strong>
               </p>
+
+              {/* Force State Buttons (Task B4) */}
+              <div className="mt-1 pt-1.5 border-t border-steel-outline/60 flex flex-col gap-1">
+                <span className="text-[10px] font-semibold text-signal-white uppercase tracking-wider">
+                  Force Panel State (Task B4):
+                </span>
+                <div className="flex flex-wrap gap-1">
+                  {(['auto', 'idle', 'listening', 'thinking', 'speaking', 'done'] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => {
+                        const target = st === 'auto' ? undefined : st
+                        setForcedState(target)
+                        logAction(`Forced panel state: ${st.toUpperCase()}`)
+                      }}
+                      className={`rounded px-2 py-0.5 text-[10px] font-mono border transition ${
+                        (st === 'auto' && forcedState === undefined) || forcedState === st
+                          ? 'bg-nuxt-signal text-void-canvas font-bold border-nuxt-signal'
+                          : 'bg-deep-slate text-pale-frost border-steel-outline hover:bg-steel-outline'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {/* Column 2: Current Turn Payload */}
