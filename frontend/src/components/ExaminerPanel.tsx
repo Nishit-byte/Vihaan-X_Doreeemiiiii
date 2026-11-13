@@ -23,7 +23,7 @@ const isTyping = (t: EventTarget | null) => {
   return !!el && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable)
 }
 
-export default function ExaminerPanel({ sessionId, turn, history, busy, onTurn }: ExaminerPanelProps) {
+export default function ExaminerPanel({ sessionId, turn, history, busy, onTurn, onStartViva }: ExaminerPanelProps) {
   const [phase, setPhase] = useState<Phase>('idle')
   const [text, setText] = useState('')
   const [err, setErr] = useState<string | null>(null)
@@ -39,7 +39,7 @@ export default function ExaminerPanel({ sessionId, turn, history, busy, onTurn }
   const chunksRef = useRef<Blob[]>([])
   const logEndRef = useRef<HTMLDivElement>(null)
 
-  const enabled = !!sessionId && !busy && phase !== 'thinking'
+  const enabled = !!sessionId && !!turn && !busy && phase !== 'thinking'
 
   // Orb amplitude from Web Audio analyser
   const startMeter = () => {
@@ -164,6 +164,19 @@ export default function ExaminerPanel({ sessionId, turn, history, busy, onTurn }
             <p className="mt-2 text-lg font-medium leading-7 text-signal-white">{turn.question_text}</p>
             {turn.done && <p className="mt-3 text-sm text-muted-fog">Viva complete. Press Finish viva for your report.</p>}
           </>
+        ) : sessionId && onStartViva ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+            <p className="text-sm text-muted-fog">
+              Workspace indexed and ready. Review the files or concept map, then begin your viva.
+            </p>
+            <button
+              onClick={onStartViva}
+              disabled={busy}
+              className="rounded-md bg-nuxt-signal px-4 py-2 text-sm font-semibold text-void-canvas hover:opacity-90 disabled:opacity-40"
+            >
+              Start Viva (Question 1)
+            </button>
+          </div>
         ) : (
           <p className="text-sm text-muted-fog">The examiner’s first question appears here once you start a viva.</p>
         )}
