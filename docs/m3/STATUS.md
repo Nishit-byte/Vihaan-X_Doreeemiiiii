@@ -9,7 +9,7 @@ Build: not started / in progress / ready for review. Review: — / PASS / FAIL (
 | A1 | A    | Voice scaffold, config & deps | done | PASS | 3daec1a | Stubs only; routes in A5 |
 | A2 | A    | TTS service | done | PASS | m3(A2) | edge-tts + ElevenLabs fallback, LRU 128 |
 | A3 | A    | Audio utils + filler cache | done | PASS | m3(A3) | Fillers 15-23 KB each; stereo/8-bit trim safe |
-| A4 | A    | STT service | not started | — | — | |
+| A4 | A    | STT service | done | PASS | m3(A4) | Groq Whisper, bounded retry, whole-transcript hallucination filter |
 | A5 | A    | voice_router + dev_server | not started | — | — | |
 | A6 | A    | Self-test + hardening | not started | — | — | |
 | B1 | B    | Recon, dev harness, stubs | done | PASS | 3daec1a | Mode (a); http://localhost:5173/examiner-dev.html |
