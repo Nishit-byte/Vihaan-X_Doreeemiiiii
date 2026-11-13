@@ -20,8 +20,14 @@ import type { TurnResponse } from '../types/api'
 import {
   RecordedAudio,
   RecorderStatus,
+  AudioPlayback,
   usePushToTalkRecorder,
+  playBase64Audio,
+  speakWithBrowserTTS,
+  stopAllPlayback,
   unlockAudio,
+  blobToBase64,
+  getPreferredTTSVoice,
 } from '../services/audioRecorder'
 
 // Mock code for utils/similarity.py to illustrate M4 workspace sync
@@ -180,6 +186,192 @@ function RecorderStatusPill({ status }: { status: RecorderStatus }) {
   }
 }
 
+/**
+ * Generates an in-memory 1.0s WAV audio chime (PCM 16-bit 22.05kHz) as clean base64
+ * for instant one-click playback testing.
+ */
+function getTestChimeBase64(): string {
+  const sampleRate = 22050
+  const duration = 1.0
+  const numSamples = Math.floor(sampleRate * duration)
+  const buffer = new ArrayBuffer(44 + numSamples * 2)
+  const view = new DataView(buffer)
+
+  function writeString(offset: number, str: string) {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i))
+    }
+  }
+
+  writeString(0, 'RIFF')
+  view.setUint32(4, 36 + numSamples * 2, true)
+  writeString(8, 'WAVE')
+  writeString(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * 2, true)
+  view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true)
+  writeString(36, 'data')
+  view.setUint32(40, numSamples * 2, true)
+
+  for (let i = 0; i < numSamples; i++) {
+    const t = i / sampleRate
+    const env = Math.exp(-2.5 * t)
+    const sample =
+      (0.5 * Math.sin(2 * Math.PI * 440 * t) +
+        0.3 * Math.sin(2 * Math.PI * 554.37 * t) +
+        0.2 * Math.sin(2 * Math.PI * 659.25 * t)) *
+      env
+    const intSample = Math.max(-32768, Math.min(32767, Math.floor(sample * 24000)))
+    view.setInt16(44 + i * 2, intSample, true)
+  }
+
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i])
+  }
+  return btoa(binary)
+}
+
+/**
+ * Real-time playback amplitude level bar (0..1 RMS) driven by AudioPlayback.getLevel()
+ */
+function LivePlaybackLevelBar({
+  getPlaybackLevel,
+  isTTS,
+}: {
+  getPlaybackLevel: () => number
+  isTTS: boolean
+}) {
+  const barRef = useRef<HTMLDivElement>(null)
+  const pctRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    let animId: number
+    const update = () => {
+      const level = getPlaybackLevel()
+      const pct = Math.min(100, Math.max(0, Math.round(level * 100)))
+      if (barRef.current) {
+        barRef.current.style.width = `${pct}%`
+        barRef.current.className = `h-full rounded-full transition-all duration-75 ${
+          isTTS
+            ? 'bg-gradient-to-r from-indigo-500 to-purple-400'
+            : pct > 50
+            ? 'bg-amber-400'
+            : 'bg-nuxt-signal'
+        }`
+      }
+      if (pctRef.current) {
+        pctRef.current.textContent = `${pct}%`
+      }
+      animId = requestAnimationFrame(update)
+    }
+    animId = requestAnimationFrame(update)
+    return () => cancelAnimationFrame(animId)
+  }, [getPlaybackLevel, isTTS])
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-3.5 bg-void-canvas rounded-full overflow-hidden border border-steel-outline p-0.5">
+        <div
+          ref={barRef}
+          className="h-full bg-nuxt-signal rounded-full transition-all duration-75"
+          style={{ width: '0%' }}
+        />
+      </div>
+      <span ref={pctRef} className="font-mono text-[11px] text-muted-fog w-9 text-right font-semibold">
+        0%
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Real-time playback progress bar (0..1) driven by AudioPlayback.getProgress()
+ */
+function LivePlaybackProgressBar({
+  getPlaybackProgress,
+  isPlaying,
+}: {
+  getPlaybackProgress: () => number
+  isPlaying: boolean
+}) {
+  const barRef = useRef<HTMLDivElement>(null)
+  const pctRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    let animId: number
+    const update = () => {
+      const progress = getPlaybackProgress()
+      const pct = Math.min(100, Math.max(0, Math.round(progress * 100)))
+      if (barRef.current) {
+        barRef.current.style.width = `${pct}%`
+        barRef.current.className = `h-full rounded-full transition-all duration-75 ${
+          isPlaying ? 'bg-nuxt-signal' : 'bg-steel-outline'
+        }`
+      }
+      if (pctRef.current) {
+        pctRef.current.textContent = `${pct}%`
+      }
+      animId = requestAnimationFrame(update)
+    }
+    animId = requestAnimationFrame(update)
+    return () => cancelAnimationFrame(animId)
+  }, [getPlaybackProgress, isPlaying])
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-3.5 bg-void-canvas rounded-full overflow-hidden border border-steel-outline p-0.5">
+        <div
+          ref={barRef}
+          className="h-full bg-nuxt-signal rounded-full transition-all duration-75"
+          style={{ width: '0%' }}
+        />
+      </div>
+      <span ref={pctRef} className="font-mono text-[11px] text-muted-fog w-9 text-right font-semibold">
+        0%
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Status indicator pill for active audio playback / browser TTS
+ */
+function PlaybackStatusPill({
+  state,
+}: {
+  state: 'idle' | 'playing-audio' | 'speaking-tts'
+}) {
+  switch (state) {
+    case 'idle':
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-deep-slate text-pale-frost border border-steel-outline">
+          <span className="h-2 w-2 rounded-full bg-blue-steel" />
+          Idle (No Playback)
+        </span>
+      )
+    case 'playing-audio':
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-950 text-emerald-300 border border-emerald-600 animate-pulse">
+          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+          Playing MP3 / Web Audio
+        </span>
+      )
+    case 'speaking-tts':
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-indigo-950 text-indigo-300 border border-indigo-600 animate-pulse">
+          <span className="h-2 w-2 rounded-full bg-indigo-400 animate-ping" />
+          Speaking (Browser TTS)
+        </span>
+      )
+  }
+}
+
 function ExaminerDevHarness() {
   const [turnIndex, setTurnIndex] = useState(0)
   const [currentTurn, setCurrentTurn] = useState<TurnResponse>(MOCK_TURNS[0])
@@ -197,6 +389,48 @@ function ExaminerDevHarness() {
   const [tooShortNotice, setTooShortNotice] = useState(false)
   const [testInputText, setTestInputText] = useState('')
   const [autoSubmitViva, setAutoSubmitViva] = useState(false)
+
+  // B3 Playback & Browser TTS debug state
+  const [playbackState, setPlaybackState] = useState<'idle' | 'playing-audio' | 'speaking-tts'>('idle')
+  const [playbackSource, setPlaybackSource] = useState('')
+  const [ttsInputText, setTtsInputText] = useState(
+    'Good point on cosine similarity. How does your implementation handle sparse embeddings?'
+  )
+  const [selectedAudioFile, setSelectedAudioFile] = useState<{
+    name: string
+    size: number
+    mimeType: string
+    base64: string
+  } | null>(null)
+  const [detectedVoiceLabel, setDetectedVoiceLabel] = useState('Detecting voice...')
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const activePlaybackRef = useRef<AudioPlayback | null>(null)
+
+  // Detect preferred TTS voice on load and voice change
+  useEffect(() => {
+    const updateVoiceLabel = () => {
+      const v = getPreferredTTSVoice()
+      if (v) {
+        setDetectedVoiceLabel(`${v.name} (${v.lang})`)
+      } else {
+        setDetectedVoiceLabel('Browser Default (en-IN fallback)')
+      }
+    }
+    updateVoiceLabel()
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.addEventListener('voiceschanged', updateVoiceLabel)
+      return () => {
+        window.speechSynthesis.removeEventListener('voiceschanged', updateVoiceLabel)
+      }
+    }
+  }, [])
+
+  // Clean up any active playback on harness unmount
+  useEffect(() => {
+    return () => {
+      stopAllPlayback()
+    }
+  }, [])
 
   const logAction = (msg: string) => {
     setActionLog((prev) => [
@@ -251,6 +485,96 @@ function ExaminerDevHarness() {
 
   const handlePrevTurn = () => {
     goToTurn(turnIndex - 1)
+  }
+
+  // Task B3 Playback & Browser TTS Handlers
+  const handleSelectAudioFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const base64 = await blobToBase64(file)
+      setSelectedAudioFile({
+        name: file.name,
+        size: file.size,
+        mimeType: file.type || 'audio/mpeg',
+        base64,
+      })
+      logAction(`📁 Loaded audio file: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`)
+    } catch (err) {
+      logAction(`❌ Failed to read audio file: ${err}`)
+    }
+  }
+
+  const handlePlaySelectedFile = () => {
+    if (!selectedAudioFile) return
+    unlockAudio()
+    setPlaybackState('playing-audio')
+    setPlaybackSource(selectedAudioFile.name)
+    logAction(`🔊 Starting Web Audio playback for "${selectedAudioFile.name}"...`)
+    const pb = playBase64Audio(selectedAudioFile.base64, selectedAudioFile.mimeType)
+    activePlaybackRef.current = pb
+    pb.done.then(() => {
+      logAction(`🔊 Web Audio playback completed for "${selectedAudioFile.name}"`)
+      setPlaybackState('idle')
+      setPlaybackSource('')
+    })
+  }
+
+  const handlePlaySampleChime = () => {
+    unlockAudio()
+    const b64 = getTestChimeBase64()
+    setPlaybackState('playing-audio')
+    setPlaybackSource('Sample Chord Chime (1.0s WAV)')
+    logAction('🎵 Playing sample chord chime (1.0s WAV) via Web Audio API...')
+    const pb = playBase64Audio(b64, 'audio/wav')
+    activePlaybackRef.current = pb
+    pb.done.then(() => {
+      logAction('🎵 Sample chord chime playback completed')
+      setPlaybackState('idle')
+      setPlaybackSource('')
+    })
+  }
+
+  const handleSpeakTTS = (textToSpeak?: string) => {
+    const text = textToSpeak || ttsInputText
+    if (!text.trim()) return
+    unlockAudio()
+    setPlaybackState('speaking-tts')
+    setPlaybackSource(`TTS: "${text.slice(0, 35)}..."`)
+    logAction(`🗣️ Started Browser TTS speaking: "${text.slice(0, 50)}..."`)
+    const pb = speakWithBrowserTTS(text)
+    activePlaybackRef.current = pb
+    pb.done.then(() => {
+      logAction('🗣️ Browser TTS speaking completed')
+      setPlaybackState('idle')
+      setPlaybackSource('')
+    })
+  }
+
+  const handleStopPlayback = () => {
+    logAction('⏹️ Stop playback called — stopping all active audio and TTS')
+    stopAllPlayback()
+    activePlaybackRef.current = null
+    setPlaybackState('idle')
+    setPlaybackSource('')
+  }
+
+  const handleTestMidPlayStop = () => {
+    logAction('🧪 Running test: Mid-play stop() after 500ms...')
+    handlePlaySampleChime()
+    setTimeout(() => {
+      logAction('🧪 Triggering stop() mid-play at 500ms...')
+      handleStopPlayback()
+    }, 500)
+  }
+
+  const handleTestOverlap = () => {
+    logAction('🧪 Running test: Starting audio then TTS immediately (second stops first)...')
+    handlePlaySampleChime()
+    setTimeout(() => {
+      logAction('🧪 Starting TTS while audio is playing (must stop audio)...')
+      handleSpeakTTS('Second playback successfully stopped the first audio!')
+    }, 200)
   }
 
   // ExaminerPanel callbacks
@@ -580,7 +904,180 @@ function ExaminerDevHarness() {
             </div>
           </div>
 
-          {/* Section 2: Mock Controls & Diagnostics Log */}
+          {/* Section 2: 🔊 Playback & Browser-TTS Debug Box (Task B3 Core Requirements) */}
+          <div className="border-b border-steel-outline bg-midnight-panel/90 p-3">
+            <div className="flex items-center justify-between pb-2 mb-2 border-b border-steel-outline/60">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-signal-white text-xs uppercase tracking-wider flex items-center gap-1.5">
+                  🔊 Playback & Browser-TTS Debug Box (Task B3)
+                </span>
+                <PlaybackStatusPill state={playbackState} />
+                {playbackSource && (
+                  <span className="text-[10px] text-muted-fog font-mono truncate max-w-xs">
+                    • {playbackSource}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-fog bg-deep-slate px-2 py-0.5 rounded border border-steel-outline max-w-xs truncate">
+                  🗣️ {detectedVoiceLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleStopPlayback}
+                  className="flex items-center gap-1 px-3 py-1 rounded bg-red-950/80 text-red-300 hover:bg-red-900 border border-red-600 font-semibold text-xs transition active:scale-95"
+                >
+                  <span>⏹️</span>
+                  <span>Stop Playback</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              {/* Card 1: Play MP3 File */}
+              <div className="flex flex-col gap-2 rounded bg-deep-slate/80 p-2.5 border border-steel-outline">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-signal-white">
+                    Play MP3 File (Web Audio API)
+                  </span>
+                  <span className="text-[10px] text-nuxt-signal font-mono">base64 → decodeAudioData</span>
+                </div>
+
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept="audio/*,.mp3,.wav,.ogg,.webm"
+                  className="hidden"
+                  onChange={handleSelectAudioFile}
+                />
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex-1 rounded py-1.5 px-2 bg-void-canvas hover:bg-steel-outline text-pale-frost text-xs border border-steel-outline transition truncate text-left"
+                  >
+                    {selectedAudioFile ? `📁 ${selectedAudioFile.name}` : '📁 Choose MP3 / Audio File…'}
+                  </button>
+                  {selectedAudioFile && (
+                    <span className="text-[10px] font-mono text-muted-fog">
+                      {(selectedAudioFile.size / 1024).toFixed(0)}KB
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 mt-auto">
+                  <button
+                    type="button"
+                    onClick={handlePlaySelectedFile}
+                    disabled={!selectedAudioFile}
+                    className="flex-1 flex items-center justify-center gap-1.5 rounded py-1.5 px-3 bg-nuxt-signal text-void-canvas font-bold text-xs hover:opacity-90 disabled:opacity-40 disabled:hover:opacity-40 transition"
+                  >
+                    <span>▶</span>
+                    <span>Play MP3 File</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePlaySampleChime}
+                    className="rounded py-1.5 px-2.5 bg-void-canvas hover:bg-steel-outline text-pale-frost font-medium text-xs border border-steel-outline transition"
+                    title="Play 1.0s sample chord chime via Web Audio"
+                  >
+                    🎵 Sample Chime
+                  </button>
+                </div>
+              </div>
+
+              {/* Card 2: Speak with Browser TTS */}
+              <div className="flex flex-col gap-2 rounded bg-deep-slate/80 p-2.5 border border-steel-outline">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-signal-white">
+                    Speak with Browser TTS (Fallback)
+                  </span>
+                  <span className="text-[10px] text-indigo-400 font-mono">prefer en-IN → en-US</span>
+                </div>
+
+                <textarea
+                  value={ttsInputText}
+                  onChange={(e) => setTtsInputText(e.target.value)}
+                  rows={2}
+                  className="w-full rounded bg-void-canvas p-1.5 text-xs text-pale-frost border border-steel-outline focus:border-indigo-400 focus:outline-none resize-none"
+                  placeholder="Enter text to speak aloud..."
+                />
+
+                <div className="flex items-center gap-2 mt-auto">
+                  <button
+                    type="button"
+                    onClick={() => handleSpeakTTS()}
+                    className="flex-1 flex items-center justify-center gap-1.5 rounded py-1.5 px-3 bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-500 transition"
+                  >
+                    <span>🗣️</span>
+                    <span>Speak with Browser TTS</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const turnText = `${currentTurn.ack_text} ${currentTurn.question_text}`
+                      setTtsInputText(turnText)
+                      logAction(`📋 Copied Turn #${turnIndex + 1} ack + question into TTS`)
+                    }}
+                    className="rounded py-1.5 px-2 bg-void-canvas hover:bg-steel-outline text-muted-fog hover:text-pale-frost text-[11px] border border-steel-outline transition"
+                    title="Use current turn ack + question"
+                  >
+                    📋 Use Turn Text
+                  </button>
+                </div>
+              </div>
+
+              {/* Card 3: Live Monitors & Acceptance Tests */}
+              <div className="flex flex-col gap-2 rounded bg-deep-slate/80 p-2.5 border border-steel-outline">
+                <span className="text-[11px] font-semibold text-signal-white">
+                  Live Playback Monitors:
+                </span>
+
+                <div className="flex flex-col gap-1">
+                  <div className="flex justify-between text-[10px] text-muted-fog">
+                    <span>Live Playback Level (RMS):</span>
+                    <span>0..1</span>
+                  </div>
+                  <LivePlaybackLevelBar
+                    getPlaybackLevel={() => activePlaybackRef.current?.getLevel() ?? 0}
+                    isTTS={playbackState === 'speaking-tts'}
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <div className="flex justify-between text-[10px] text-muted-fog">
+                    <span>Playback Progress:</span>
+                    <span>0 → 1</span>
+                  </div>
+                  <LivePlaybackProgressBar
+                    getPlaybackProgress={() => activePlaybackRef.current?.getProgress() ?? 0}
+                    isPlaying={playbackState !== 'idle'}
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 mt-auto pt-1 border-t border-steel-outline/40">
+                  <span className="text-[10px] text-muted-fog">Tests:</span>
+                  <button
+                    type="button"
+                    onClick={handleTestMidPlayStop}
+                    className="rounded px-2 py-0.5 bg-void-canvas hover:bg-steel-outline text-[10px] text-pale-frost border border-steel-outline transition"
+                  >
+                    Mid-Play Stop (500ms)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleTestOverlap}
+                    className="rounded px-2 py-0.5 bg-void-canvas hover:bg-steel-outline text-[10px] text-pale-frost border border-steel-outline transition"
+                  >
+                    Overlap (Audio → TTS)
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 3: Mock Controls & Diagnostics Log */}
           <div className="grid grid-cols-3 gap-4 p-3 bg-midnight-panel">
             {/* Column 1: Step to Mock Turn */}
             <div className="flex flex-col gap-1.5">
