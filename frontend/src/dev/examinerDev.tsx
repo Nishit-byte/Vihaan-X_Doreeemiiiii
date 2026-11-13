@@ -508,7 +508,7 @@ function ExaminerDevHarness() {
       if (v) {
         setDetectedVoiceLabel(`${v.name} (${v.lang})`)
       } else {
-        setDetectedVoiceLabel('Browser Default (en-IN fallback)')
+        setDetectedVoiceLabel('Browser Default (en-US fallback)')
       }
     }
     updateVoiceLabel()
@@ -1710,7 +1710,7 @@ function ExaminerDevHarness() {
                 <span className="text-[11px] font-semibold text-signal-white">
                   Speak with Browser TTS (Fallback)
                 </span>
-                <span className="text-[10px] text-indigo-400 font-mono">prefer en-IN → en-US</span>
+                <span className="text-[10px] text-indigo-400 font-mono">prefer en-US → en-IN</span>
               </div>
 
               <textarea

@@ -23,7 +23,7 @@ except ValueError:
     STT_TIMEOUT_S = 10.0
 
 # Edge-TTS
-TTS_VOICE: str = os.getenv("TTS_VOICE", "en-IN-PrabhatNeural")
+TTS_VOICE: str = os.getenv("TTS_VOICE", "en-US-AndrewNeural")
 TTS_RATE: str = os.getenv("TTS_RATE", "+0%")
 try:
     TTS_TIMEOUT_S: float = float(os.getenv("TTS_TIMEOUT_S", "8"))
