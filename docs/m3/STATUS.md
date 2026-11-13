@@ -14,7 +14,7 @@ Build: not started / in progress / ready for review. Review: — / PASS / FAIL (
 | A6 | A    | Self-test + hardening | not started | — | — | |
 | B1 | B    | Recon, dev harness, stubs | done | PASS | 3daec1a | Mode (a); http://localhost:5173/examiner-dev.html |
 | B2 | B    | Push-to-talk recorder | done | PASS | m3(B2) | 3 reviewer fixes (keyup/blur/enabled stuck-recording); B6: avoid 2 hook instances binding Space |
-| B3 | B    | Playback + browser TTS | not started | — | — | |
+| B3 | B    | Playback + browser TTS | done | PASS | m3(B3) | Reviewer fixed progress-after-stop; B6: TTS bars start only on onstart |
 | B4 | B    | Panel static layout | not started | — | — | |
 | B5 | B    | Voice orb | not started | — | — | |
 | B6 | B    | Turn-flow wiring | not started | — | — | |

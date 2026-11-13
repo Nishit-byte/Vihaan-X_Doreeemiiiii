@@ -70,6 +70,19 @@ export function unlockAudio(): void {
   }
 }
 
+// Auto-unlock AudioContext on first user interaction per CONTEXT §5.8 / TASKS.md B3
+if (typeof window !== 'undefined') {
+  const handleFirstInteraction = () => {
+    unlockAudio()
+    window.removeEventListener('pointerdown', handleFirstInteraction, true)
+    window.removeEventListener('keydown', handleFirstInteraction, true)
+    window.removeEventListener('touchstart', handleFirstInteraction, true)
+  }
+  window.addEventListener('pointerdown', handleFirstInteraction, { capture: true, passive: true })
+  window.addEventListener('keydown', handleFirstInteraction, { capture: true, passive: true })
+  window.addEventListener('touchstart', handleFirstInteraction, { capture: true, passive: true })
+}
+
 /**
  * MIME preference: audio/webm;codecs=opus -> audio/webm -> audio/mp4 -> browser default
  */
@@ -626,7 +639,7 @@ export function usePushToTalkRecorder(
 }
 
 // =============================================================================
-// Stubs for Task B3 (playBase64Audio, speakWithBrowserTTS, stopAllPlayback)
+// Task B3: Audio Playback, Levels & Browser-TTS Fallback
 // =============================================================================
 
 export interface AudioPlayback {
@@ -636,27 +649,445 @@ export interface AudioPlayback {
   getProgress(): number /* 0..1 */
 }
 
+// Module-level references to active playback and active TTS utterance
+let activePlayback: AudioPlayback | null = null
+let activeUtterance: SpeechSynthesisUtterance | null = null
+
+/**
+ * Converts a base64 string (with or without data: URL prefix) to an ArrayBuffer.
+ */
+export function base64ToArrayBuffer(b64: string): ArrayBuffer {
+  const cleanB64 = b64.replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '')
+  if (!cleanB64) {
+    return new ArrayBuffer(0)
+  }
+  const binaryString =
+    typeof window !== 'undefined' && typeof window.atob === 'function'
+      ? window.atob(cleanB64)
+      : typeof atob === 'function'
+      ? atob(cleanB64)
+      : ''
+  const len = binaryString.length
+  const bytes = new Uint8Array(len)
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i)
+  }
+  return bytes.buffer
+}
+
+let cachedVoices: SpeechSynthesisVoice[] = []
+
+if (typeof window !== 'undefined' && window.speechSynthesis) {
+  cachedVoices = window.speechSynthesis.getVoices()
+  if (typeof window.speechSynthesis.addEventListener === 'function') {
+    window.speechSynthesis.addEventListener('voiceschanged', () => {
+      cachedVoices = window.speechSynthesis.getVoices()
+    })
+  } else {
+    window.speechSynthesis.onvoiceschanged = () => {
+      cachedVoices = window.speechSynthesis.getVoices()
+    }
+  }
+}
+
+/**
+ * Voice selection preferring en-IN voices (e.g. Prabhat/Heera/Indian English),
+ * falling back to en-US, then any English voice.
+ */
+export function getPreferredTTSVoice(): SpeechSynthesisVoice | null {
+  if (typeof window === 'undefined' || !window.speechSynthesis) return null
+  const live = window.speechSynthesis.getVoices()
+  const voices = live && live.length > 0 ? live : cachedVoices
+  if (!voices || voices.length === 0) return null
+
+  // 1. Prefer en-IN voice
+  const enIn = voices.find((v) => {
+    const l = (v.lang || '').toLowerCase().replace('_', '-')
+    return l === 'en-in' || l.startsWith('en-in') || /india/i.test(v.name)
+  })
+  if (enIn) return enIn
+
+  // 2. Else en-US voice
+  const enUs = voices.find((v) => {
+    const l = (v.lang || '').toLowerCase().replace('_', '-')
+    return l === 'en-us' || l.startsWith('en-us')
+  })
+  if (enUs) return enUs
+
+  // 3. Else any English voice
+  const anyEn = voices.find((v) => (v.lang || '').toLowerCase().startsWith('en'))
+  if (anyEn) return anyEn
+
+  return voices[0] || null
+}
+
+/**
+ * Stops any currently active playback (Web Audio source or Browser TTS)
+ */
+export function stopAllPlayback(): void {
+  if (activePlayback) {
+    const current = activePlayback
+    activePlayback = null
+    try {
+      current.stop()
+    } catch {}
+  }
+  if (typeof window !== 'undefined' && window.speechSynthesis) {
+    try {
+      window.speechSynthesis.cancel()
+    } catch {}
+  }
+  activeUtterance = null
+}
+
+/**
+ * Decodes and plays a base64-encoded audio clip (MP3, WAV, WebM) via Web Audio API.
+ * Pipeline: base64 -> ArrayBuffer -> decodeAudioData -> AudioBufferSourceNode -> AnalyserNode -> destination.
+ *
+ * Rules:
+ * - One shared AudioContext
+ * - One playback at a time (calling this stops previous playback)
+ * - getProgress: calculated from AudioContext running clock (0..1)
+ * - getLevel: instantaneous RMS amplitude (0..1) from AnalyserNode
+ * - done: Promise that always resolves (on natural completion, stop, or decode error)
+ */
 export function playBase64Audio(
-  _b64: string,
+  b64: string,
   _mimeType: string = 'audio/mpeg'
 ): AudioPlayback {
-  return {
-    done: Promise.resolve(),
-    stop: () => {},
-    getLevel: () => 0,
-    getProgress: () => 0,
+  // Enforce single active playback
+  stopAllPlayback()
+
+  let isStopped = false
+  let isEnded = false
+  let isStarted = false
+  let sourceNode: AudioBufferSourceNode | null = null
+  let analyserNode: AnalyserNode | null = null
+  let duration = 0
+  let startCtxTime = 0
+  let stoppedProgress = 0
+
+  let resolveDone: () => void
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve
+  })
+
+  function cleanupNodes() {
+    if (sourceNode) {
+      try {
+        sourceNode.disconnect()
+      } catch {}
+      sourceNode = null
+    }
+    if (analyserNode) {
+      try {
+        analyserNode.disconnect()
+      } catch {}
+      analyserNode = null
+    }
   }
+
+  function handleFinish() {
+    if (isEnded) return
+    isEnded = true
+    if (activePlayback === playback) {
+      activePlayback = null
+    }
+    cleanupNodes()
+    resolveDone()
+  }
+
+  function stop() {
+    if (isStopped || isEnded) return
+    isStopped = true
+    if (activePlayback === playback) {
+      activePlayback = null
+    }
+    const ctx = getSharedAudioContext()
+    if (duration > 0 && ctx && isStarted) {
+      stoppedProgress = Math.min(1, Math.max(0, (ctx.currentTime - startCtxTime) / duration))
+    }
+    if (sourceNode) {
+      try {
+        sourceNode.stop()
+      } catch {}
+    }
+    cleanupNodes()
+    resolveDone()
+  }
+
+  function getLevel(): number {
+    if (isStopped || isEnded || !isStarted || !analyserNode) return 0
+    try {
+      const data = new Uint8Array(analyserNode.fftSize)
+      analyserNode.getByteTimeDomainData(data)
+      let sumSquares = 0
+      for (let i = 0; i < data.length; i++) {
+        const normalized = (data[i] - 128) / 128
+        sumSquares += normalized * normalized
+      }
+      const rms = Math.sqrt(sumSquares / data.length)
+      return Math.min(1, Math.max(0, rms * 2.5))
+    } catch {
+      return 0
+    }
+  }
+
+  function getProgress(): number {
+    if (isStopped) return stoppedProgress
+    if (isEnded) return 1
+    const ctx = getSharedAudioContext()
+    if (!ctx || !isStarted || duration <= 0) return 0
+    const elapsed = Math.max(0, ctx.currentTime - startCtxTime)
+    return Math.min(1, Math.max(0, elapsed / duration))
+  }
+
+  const playback: AudioPlayback = {
+    done,
+    stop,
+    getLevel,
+    getProgress,
+  }
+
+  activePlayback = playback
+
+  const ctx = getSharedAudioContext()
+  if (!ctx || !b64 || !b64.trim()) {
+    handleFinish()
+    return playback
+  }
+
+  unlockAudio()
+
+  try {
+    const arrayBuffer = base64ToArrayBuffer(b64)
+    if (arrayBuffer.byteLength === 0) {
+      handleFinish()
+      return playback
+    }
+
+    const decodePromise = new Promise<AudioBuffer>((res, rej) => {
+      // slice(0) to pass a clean copy because decodeAudioData can neuter the ArrayBuffer
+      const copy = arrayBuffer.slice(0)
+      const p = ctx.decodeAudioData(copy, res, rej)
+      if (p && typeof (p as Promise<AudioBuffer>).then === 'function') {
+        ;(p as Promise<AudioBuffer>).then(res, rej)
+      }
+    })
+
+    decodePromise
+      .then(async (audioBuffer) => {
+        if (isStopped || isEnded) return
+
+        duration = audioBuffer.duration
+
+        if (ctx.state === 'suspended') {
+          try {
+            await ctx.resume()
+          } catch {}
+        }
+
+        if (isStopped || isEnded) return
+
+        const source = ctx.createBufferSource()
+        source.buffer = audioBuffer
+        sourceNode = source
+
+        const analyser = ctx.createAnalyser()
+        analyser.fftSize = 256
+        analyserNode = analyser
+
+        source.connect(analyser)
+        analyser.connect(ctx.destination)
+
+        source.onended = () => {
+          handleFinish()
+        }
+
+        startCtxTime = ctx.currentTime
+        isStarted = true
+        source.start(0)
+      })
+      .catch((err) => {
+        console.warn('[playBase64Audio] Failed to decode audio data:', err)
+        handleFinish()
+      })
+  } catch (err) {
+    console.warn('[playBase64Audio] Failed to process audio base64:', err)
+    handleFinish()
+  }
+
+  return playback
 }
 
-export function speakWithBrowserTTS(_text: string): AudioPlayback {
-  return {
-    done: Promise.resolve(),
-    stop: () => {},
-    getLevel: () => 0,
-    getProgress: () => 0,
-  }
-}
+/**
+ * Speaks text using the browser's native SpeechSynthesis API as fallback when audio_base64 is empty.
+ *
+ * Rules:
+ * - Preferred voice: en-IN (Indian English), else en-US, else any English
+ * - getProgress: tracked from 'boundary' event charIndex, with smooth time-based estimate fallback
+ * - getLevel: simulated organic speech level (0..1) while speaking; 0 when silent or stopped
+ * - stop(): cancels SpeechSynthesis immediately
+ * - One playback at a time (calling this stops previous playback)
+ * - done: Promise that always resolves on completion or stop
+ */
+export function speakWithBrowserTTS(text: string): AudioPlayback {
+  stopAllPlayback()
 
-export function stopAllPlayback(): void {
-  // Implemented in Task B3
+  let isStopped = false
+  let isEnded = false
+  let isStarted = false
+  let speakStartTime = 0
+  let hasReceivedBoundary = false
+  let latestCharIndex = 0
+  let stoppedProgress = 0
+  let keepAliveTimer: number | null = null
+
+  let resolveDone: () => void
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve
+  })
+
+  function cleanup() {
+    if (keepAliveTimer !== null) {
+      window.clearInterval(keepAliveTimer)
+      keepAliveTimer = null
+    }
+    if (activeUtterance === utterance) {
+      activeUtterance = null
+    }
+  }
+
+  function handleFinish() {
+    if (isEnded) return
+    isEnded = true
+    if (activePlayback === playback) {
+      activePlayback = null
+    }
+    cleanup()
+    resolveDone()
+  }
+
+  function stop() {
+    if (isStopped || isEnded) return
+    stoppedProgress = getProgress()
+    isStopped = true
+    if (activePlayback === playback) {
+      activePlayback = null
+    }
+    cleanup()
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      try {
+        window.speechSynthesis.cancel()
+      } catch {}
+    }
+    handleFinish()
+  }
+
+  const cleanText = text ? text.trim() : ''
+  const wordCount = cleanText ? cleanText.split(/\s+/).length : 0
+  // Standard speech rate: ~2.5 words per second
+  const estimatedDurationSec = Math.max(1, wordCount / 2.5)
+
+  function getProgress(): number {
+    if (isStopped) return stoppedProgress
+    if (isEnded) return 1
+    if (!isStarted || !cleanText) return 0
+
+    const elapsedSec = (performance.now() - speakStartTime) / 1000
+
+    if (hasReceivedBoundary && cleanText.length > 0) {
+      const charProgress = latestCharIndex / cleanText.length
+      const timeEst = elapsedSec / estimatedDurationSec
+      return Math.min(0.98, Math.max(charProgress, timeEst * 0.9))
+    }
+
+    // Time-based estimate if boundary events never fire in current browser/voice
+    const timeProgress = elapsedSec / estimatedDurationSec
+    return Math.min(0.95, Math.max(0, timeProgress))
+  }
+
+  function getLevel(): number {
+    if (isStopped || isEnded || !isStarted) return 0
+    const t = (performance.now() - speakStartTime) / 1000
+    // Dynamic speech cadence simulation (0.08..0.85 range)
+    const wave1 = Math.sin(t * 14) * 0.18
+    const wave2 = Math.sin(t * 6) * 0.14
+    const wave3 = Math.cos(t * 26) * 0.08
+    const level = 0.38 + wave1 + wave2 + wave3
+    return Math.min(1, Math.max(0.08, level))
+  }
+
+  const playback: AudioPlayback = {
+    done,
+    stop,
+    getLevel,
+    getProgress,
+  }
+
+  activePlayback = playback
+
+  if (
+    typeof window === 'undefined' ||
+    !window.speechSynthesis ||
+    !cleanText
+  ) {
+    handleFinish()
+    return playback
+  }
+
+  let utterance: SpeechSynthesisUtterance
+
+  try {
+    window.speechSynthesis.cancel()
+
+    utterance = new SpeechSynthesisUtterance(cleanText)
+    activeUtterance = utterance
+
+    const preferredVoice = getPreferredTTSVoice()
+    if (preferredVoice) {
+      utterance.voice = preferredVoice
+      utterance.lang = preferredVoice.lang
+    } else {
+      utterance.lang = 'en-IN'
+    }
+    utterance.rate = 1.0
+    utterance.pitch = 1.0
+
+    utterance.onstart = () => {
+      isStarted = true
+      speakStartTime = performance.now()
+    }
+
+    utterance.onboundary = (e: SpeechSynthesisEvent) => {
+      hasReceivedBoundary = true
+      if (typeof e.charIndex === 'number' && e.charIndex >= 0) {
+        latestCharIndex = e.charIndex
+      }
+    }
+
+    utterance.onend = () => {
+      handleFinish()
+    }
+
+    utterance.onerror = () => {
+      // Always resolve on error/cancel per spec
+      handleFinish()
+    }
+
+    // Chrome keep-alive guard for longer speech
+    keepAliveTimer = window.setInterval(() => {
+      if (typeof window !== 'undefined' && window.speechSynthesis && window.speechSynthesis.speaking) {
+        if (typeof window.speechSynthesis.pause === 'function') window.speechSynthesis.pause()
+        if (typeof window.speechSynthesis.resume === 'function') window.speechSynthesis.resume()
+      }
+    }, 10000)
+
+    window.speechSynthesis.speak(utterance)
+  } catch (err) {
+    console.warn('[speakWithBrowserTTS] SpeechSynthesis failed:', err)
+    handleFinish()
+  }
+
+  return playback
 }
