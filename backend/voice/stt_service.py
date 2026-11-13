@@ -177,6 +177,7 @@ async def transcribe_audio(
     lang: str | None = "en",
     domain_terms: list[str] | None = None,
     mime_type: str | None = None,
+    domain_prompt: str | None = None,
 ) -> str:
     """Transcribe audio bytes to text using Groq Whisper.
 
@@ -219,7 +220,8 @@ async def transcribe_audio(
     # 3. Prepare request parameters
     model = getattr(config, "GROQ_STT_MODEL", "whisper-large-v3-turbo")
     timeout_s = getattr(config, "STT_TIMEOUT_S", 10.0)
-    prompt = build_domain_prompt(domain_terms)
+    # domain_prompt (M1's comma-joined identifiers) is treated as terms so the style cue + 600-char cap still apply
+    prompt = build_domain_prompt(domain_terms or domain_prompt)
 
     req_kwargs: dict[str, Any] = {
         "file": (filename, norm_bytes),
@@ -335,6 +337,7 @@ def transcribe_audio_sync(
     lang: str | None = "en",
     domain_terms: list[str] | None = None,
     mime_type: str | None = None,
+    domain_prompt: str | None = None,
 ) -> str:
     """Synchronous wrapper for transcribe_audio for use in scripts only. NEVER raises."""
     try:
@@ -355,6 +358,7 @@ def transcribe_audio_sync(
                         lang=lang,
                         domain_terms=domain_terms,
                         mime_type=mime_type,
+                        domain_prompt=domain_prompt,
                     ),
                 ).result(timeout=timeout_val)
         else:
@@ -364,6 +368,7 @@ def transcribe_audio_sync(
                     lang=lang,
                     domain_terms=domain_terms,
                     mime_type=mime_type,
+                    domain_prompt=domain_prompt,
                 )
             )
     except Exception as exc:
