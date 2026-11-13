@@ -1,27 +1,39 @@
 /**
- * M3 Voice Pipeline — ExaminerPanel Component (Tasks B4 & B5)
+ * M3 Voice Pipeline — ExaminerPanel Component (Task B6)
  *
- * Implements the visual panel layout and real-time VoiceOrb animation:
- * - Sub-components (all in this file):
- *     1. ExaminerHeader (title + reactive status pill)
- *     2. DepthMeter (L1 Recall, L2 Comprehension, L3 Analysis, L4 Evaluation with animated highlight)
- *     3. VoiceOrb (Task B5: Canvas with devicePixelRatio scaling, requestAnimationFrame, smoothed scale, per-state visuals)
- *     4. QuestionCard (topic chip, depth chip, muted ack_text, bold question_text, aria-live='polite')
- *     5. DoneCard ('Viva complete' + 'View report' button -> onRequestReport)
- *     6. TranscriptHistory (collapsible, question + student transcript + verdict badge)
- *     7. PushToTalkButton (press-and-hold with pointer events, 'Hold Space to answer' label)
- *     8. TextFallbackInput (Enter submits, Shift+Enter newline)
- *
- * Styling & Sizing:
- * - Tailwind CSS, dark slate theme (index.css design tokens)
- * - Fills the 35% column at full height (h-full flex flex-col min-h-0 overflow-hidden)
- * - Transcript history scrolls (overflow-y-auto), nothing else overflows.
- * - Retains full backward compatibility with M4 App.tsx props.
+ * Implements the complete autonomous viva voice and text turn-flow:
+ * 1. initialTurn spoken once on mount (after unlockAudio, guarded against React 18 StrictMode double-speak)
+ * 2. idle -> Push-to-Talk (Space or hold button) = listening -> release = thinking
+ * 3. thinking: plays random filler audio instantly (fetched from fillersUrl, failed fetches ignored silently)
+ *    and calls onSubmitAudio / onSubmitText
+ * 4. on response: stops filler, appends to transcript history, calls onTurn once, speaks audio_base64
+ *    (or browser TTS fallback if empty) = speaking, with word-by-word karaoke highlighting of ack + question
+ *    synced to AudioPlayback.getProgress() -> returns to idle
+ * 5. Barge-in: Space while speaking immediately halts playback and transitions to listening
+ * 6. Cancellation: Esc cancels recording and ignores in-flight requests (requestIdRef)
+ * 7. Error handling:
+ *    - submission rejects -> inline error banner + 'Retry' resending the exact same recording or text
+ *    - empty student_transcript or verdict no_answer -> "Didn't catch that — try again or type"
+ *    - mic denied -> status badge and text fallback input becomes primary
+ * 8. Done state: done=true displays DoneCard ('Viva complete' + 'View report')
+ * 9. Live levelSource feeds recorder.getInputLevel() during listening, active playback.getLevel() during speaking, 0 otherwise
+ * 10. select-none scoped strictly to buttons; question and transcript text remain fully selectable
  */
 
-import React, { useId, useMemo, useRef, useState, useEffect } from 'react'
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { TurnResponse, Verdict } from '../types/api'
-import type { RecordedAudio } from '../services/audioRecorder'
+import {
+  RecordedAudio,
+  RecorderStatus,
+  AudioPlayback,
+  usePushToTalkRecorder,
+  playBase64Audio,
+  speakWithBrowserTTS,
+  stopAllPlayback,
+  unlockAudio,
+  shouldIgnoreKeyboardTarget,
+  isTextInputElement,
+} from '../services/audioRecorder'
 
 export type ExaminerTurnLike = TurnResponse
 
@@ -52,7 +64,7 @@ export interface ExaminerPanelProps {
   busy?: boolean
   onStartViva?: () => void
 
-  // Testing & dev-harness state overrides
+  // Testing & dev-harness overrides
   forceState?: PanelState
   levelSource?: () => number
 }
@@ -66,6 +78,21 @@ const DEPTH_LEVELS = [
 ] as const
 
 /**
+ * Builds spoken text combining ack_text and question_text per CONTEXT §5.2
+ */
+export function buildSpokenText(
+  ackText?: string | null,
+  questionText?: string | null
+): string {
+  const ack = (ackText || '').trim()
+  const q = (questionText || '').trim()
+  if (!ack) return q
+  if (!q) return ack
+  const endsWithPunct = /[.!?]$/.test(ack)
+  return `${ack}${endsWithPunct ? '' : '.'} ${q}`
+}
+
+/**
  * 1. Examiner Header with live status pill
  */
 function ExaminerHeader({
@@ -76,7 +103,7 @@ function ExaminerHeader({
   disabled: boolean
 }) {
   return (
-    <header className="flex shrink-0 items-center justify-between pb-2 border-b border-steel-outline">
+    <header className="flex shrink-0 items-center justify-between pb-2 border-b border-steel-outline select-none">
       <div className="flex items-center gap-2">
         <span className="font-bold text-signal-white text-sm tracking-tight">
           Viva Examiner
@@ -126,7 +153,6 @@ function ExaminerHeader({
 
 /**
  * 2. Depth Meter (L1 Recall, L2 Comprehension, L3 Analysis, L4 Evaluation)
- * Smooth animated highlighting on cognitive level transition.
  */
 function DepthMeter({ currentDepth }: { currentDepth: number }) {
   const activeLevel = Math.max(1, Math.min(4, currentDepth))
@@ -134,7 +160,7 @@ function DepthMeter({ currentDepth }: { currentDepth: number }) {
 
   return (
     <section
-      className="shrink-0 flex flex-col gap-1.5 py-1"
+      className="shrink-0 flex flex-col gap-1.5 py-1 select-none"
       role="meter"
       aria-label="Cognitive depth level"
       aria-valuenow={activeLevel}
@@ -159,7 +185,6 @@ function DepthMeter({ currentDepth }: { currentDepth: number }) {
 
           return (
             <div key={level} className="flex flex-col gap-1">
-              {/* Segment Bar */}
               <div
                 className={`h-1.5 rounded-full transition-all duration-300 ease-out ${
                   isActive
@@ -169,8 +194,6 @@ function DepthMeter({ currentDepth }: { currentDepth: number }) {
                     : 'bg-steel-outline'
                 }`}
               />
-
-              {/* Segment Label */}
               <div
                 className={`text-[10px] text-center truncate transition-colors duration-300 ${
                   isActive
@@ -192,19 +215,7 @@ function DepthMeter({ currentDepth }: { currentDepth: number }) {
 }
 
 /**
- * 3. VoiceOrb (Task B5)
- * Real-time reactive voice visualization using HTML5 Canvas:
- * - High-DPI support with devicePixelRatio scaling
- * - Smoothed level scale: 1 + level * 0.35 (lerp)
- * - Per-state visuals:
- *     - idle: slow breathing slate/indigo
- *     - listening: emerald reacting to mic level
- *     - thinking: amber rotating dashed ring
- *     - speaking: indigo/violet ripples reacting to playback level
- *     - done: calm static emerald with checkmark
- * - Zero React state updates per frame (100% rAF canvas rendering)
- * - Loop cleanly cancelled on unmount
- * - Accessibility: prefers-reduced-motion renders static state orb with no rAF overhead
+ * 3. VoiceOrb (Task B5) Canvas Drawing Helpers
  */
 function drawIdleOrb(
   ctx: CanvasRenderingContext2D,
@@ -212,13 +223,11 @@ function drawIdleOrb(
   cx: number,
   cy: number,
   baseRadius: number,
-  size: number
+  _size: number
 ) {
-  // Slow breathing slate / indigo: period ~3.5s
   const breath = Math.sin(time * 0.0018) * 0.06
   const r = baseRadius * (1 + breath)
 
-  // Soft ambient outer halo
   const halo = ctx.createRadialGradient(cx, cy, r * 0.6, cx, cy, r * 1.55)
   halo.addColorStop(0, 'rgba(99, 102, 241, 0.22)')
   halo.addColorStop(0.5, 'rgba(71, 85, 105, 0.12)')
@@ -228,29 +237,25 @@ function drawIdleOrb(
   ctx.arc(cx, cy, r * 1.55, 0, Math.PI * 2)
   ctx.fill()
 
-  // Faint orbital ring
   ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)'
   ctx.lineWidth = 1
   ctx.beginPath()
   ctx.arc(cx, cy, r * 1.35, 0, Math.PI * 2)
   ctx.stroke()
 
-  // Core gradient: slate & indigo
   const core = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 0.1, cx, cy, r)
-  core.addColorStop(0, '#6366f1') // indigo-500
-  core.addColorStop(0.45, '#3730a3') // indigo-800
-  core.addColorStop(1, '#0f172a') // slate-900
+  core.addColorStop(0, '#6366f1')
+  core.addColorStop(0.45, '#3730a3')
+  core.addColorStop(1, '#0f172a')
   ctx.fillStyle = core
   ctx.beginPath()
   ctx.arc(cx, cy, r, 0, Math.PI * 2)
   ctx.fill()
 
-  // Core border
   ctx.strokeStyle = 'rgba(129, 140, 248, 0.5)'
   ctx.lineWidth = 1.5
   ctx.stroke()
 
-  // Soft specular highlight
   ctx.beginPath()
   ctx.arc(cx - r * 0.28, cy - r * 0.28, r * 0.22, 0, Math.PI * 2)
   ctx.fillStyle = 'rgba(255, 255, 255, 0.14)'
@@ -266,11 +271,9 @@ function drawListeningOrb(
   baseRadius: number,
   size: number
 ) {
-  // Emerald reacting to mic level
   const r = baseRadius * scale
   const maxR = size / 2 - 3
 
-  // Dynamic outer reactive shockwaves
   const wave1 = Math.min(maxR, baseRadius * (scale + 0.22 + smoothedLevel * 0.25))
   const a1 = Math.min(0.85, 0.25 + smoothedLevel * 0.55)
   ctx.strokeStyle = `rgba(0, 220, 130, ${a1})`
@@ -289,7 +292,6 @@ function drawListeningOrb(
     ctx.stroke()
   }
 
-  // Ambient emerald glow
   const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, Math.min(maxR, r * 1.6))
   glow.addColorStop(0, `rgba(0, 220, 130, ${0.35 + smoothedLevel * 0.4})`)
   glow.addColorStop(0.7, `rgba(5, 150, 105, ${0.15 + smoothedLevel * 0.2})`)
@@ -299,22 +301,19 @@ function drawListeningOrb(
   ctx.arc(cx, cy, Math.min(maxR, r * 1.6), 0, Math.PI * 2)
   ctx.fill()
 
-  // Core gradient: emerald
   const core = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 0.1, cx, cy, r)
-  core.addColorStop(0, '#34d399') // emerald-400
-  core.addColorStop(0.5, '#059669') // emerald-600
-  core.addColorStop(1, '#064e3b') // emerald-900
+  core.addColorStop(0, '#34d399')
+  core.addColorStop(0.5, '#059669')
+  core.addColorStop(1, '#064e3b')
   ctx.fillStyle = core
   ctx.beginPath()
   ctx.arc(cx, cy, r, 0, Math.PI * 2)
   ctx.fill()
 
-  // Core border
   ctx.strokeStyle = `rgba(52, 211, 153, ${0.7 + smoothedLevel * 0.3})`
   ctx.lineWidth = 2 + smoothedLevel * 1.5
   ctx.stroke()
 
-  // Specular highlight
   ctx.beginPath()
   ctx.arc(cx - r * 0.28, cy - r * 0.28, r * 0.22, 0, Math.PI * 2)
   ctx.fillStyle = 'rgba(255, 255, 255, 0.22)'
@@ -327,42 +326,37 @@ function drawThinkingOrb(
   cx: number,
   cy: number,
   baseRadius: number,
-  size: number
+  _size: number
 ) {
-  // Amber rotating dashed ring
   const angle = (time * 0.0024) % (Math.PI * 2)
   const ring1R = baseRadius * 1.38
 
-  // Outer primary rotating dashed ring
   ctx.save()
   ctx.translate(cx, cy)
   ctx.rotate(angle)
   ctx.setLineDash([8, 6])
-  ctx.strokeStyle = '#f59e0b' // amber-500
+  ctx.strokeStyle = '#f59e0b'
   ctx.lineWidth = 2.4
   ctx.beginPath()
   ctx.arc(0, 0, ring1R, 0, Math.PI * 2)
   ctx.stroke()
   ctx.restore()
 
-  // Inner counter-rotating dashed accent
   const ring2R = baseRadius * 1.18
   ctx.save()
   ctx.translate(cx, cy)
   ctx.rotate(-angle * 0.65)
   ctx.setLineDash([4, 6])
-  ctx.strokeStyle = 'rgba(251, 191, 36, 0.45)' // amber-400
+  ctx.strokeStyle = 'rgba(251, 191, 36, 0.45)'
   ctx.lineWidth = 1.4
   ctx.beginPath()
   ctx.arc(0, 0, ring2R, 0, Math.PI * 2)
   ctx.stroke()
   ctx.restore()
 
-  // Core subtle pulse
   const pulse = Math.sin(time * 0.004) * 0.035
   const r = baseRadius * (1 + pulse)
 
-  // Ambient glow
   const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 1.5)
   glow.addColorStop(0, 'rgba(245, 158, 11, 0.28)')
   glow.addColorStop(0.6, 'rgba(217, 119, 6, 0.12)')
@@ -372,22 +366,19 @@ function drawThinkingOrb(
   ctx.arc(cx, cy, r * 1.5, 0, Math.PI * 2)
   ctx.fill()
 
-  // Core gradient: amber
   const core = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 0.1, cx, cy, r)
-  core.addColorStop(0, '#fbbf24') // amber-400
-  core.addColorStop(0.5, '#d97706') // amber-600
-  core.addColorStop(1, '#78350f') // amber-900
+  core.addColorStop(0, '#fbbf24')
+  core.addColorStop(0.5, '#d97706')
+  core.addColorStop(1, '#78350f')
   ctx.fillStyle = core
   ctx.beginPath()
   ctx.arc(cx, cy, r, 0, Math.PI * 2)
   ctx.fill()
 
-  // Core border
   ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)'
   ctx.lineWidth = 1.8
   ctx.stroke()
 
-  // Specular highlight
   ctx.beginPath()
   ctx.arc(cx - r * 0.28, cy - r * 0.28, r * 0.22, 0, Math.PI * 2)
   ctx.fillStyle = 'rgba(255, 255, 255, 0.18)'
@@ -404,11 +395,9 @@ function drawSpeakingOrb(
   baseRadius: number,
   size: number
 ) {
-  // Indigo / violet ripples reacting to playback level
   const r = baseRadius * scale
   const maxR = size / 2 - 3
 
-  // Concentric ripples expanding outward
   for (let w = 0; w < 3; w++) {
     const phase = (time * 0.0016 + w * 0.333) % 1.0
     const maxExpansion = maxR - r
@@ -421,7 +410,6 @@ function drawSpeakingOrb(
     ctx.stroke()
   }
 
-  // Ambient violet/indigo glow
   const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, Math.min(maxR, r * 1.6))
   glow.addColorStop(0, `rgba(168, 85, 247, ${0.35 + smoothedLevel * 0.45})`)
   glow.addColorStop(0.5, `rgba(99, 102, 241, ${0.2 + smoothedLevel * 0.3})`)
@@ -431,23 +419,20 @@ function drawSpeakingOrb(
   ctx.arc(cx, cy, Math.min(maxR, r * 1.6), 0, Math.PI * 2)
   ctx.fill()
 
-  // Core gradient: violet/indigo
   const core = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 0.1, cx, cy, r)
-  core.addColorStop(0, '#c084fc') // purple-400
-  core.addColorStop(0.4, '#818cf8') // indigo-400
-  core.addColorStop(0.8, '#4f46e5') // indigo-600
-  core.addColorStop(1, '#312e81') // indigo-900
+  core.addColorStop(0, '#c084fc')
+  core.addColorStop(0.4, '#818cf8')
+  core.addColorStop(0.8, '#4f46e5')
+  core.addColorStop(1, '#312e81')
   ctx.fillStyle = core
   ctx.beginPath()
   ctx.arc(cx, cy, r, 0, Math.PI * 2)
   ctx.fill()
 
-  // Core border
   ctx.strokeStyle = `rgba(192, 132, 252, ${0.75 + smoothedLevel * 0.25})`
   ctx.lineWidth = 2 + smoothedLevel * 1.5
   ctx.stroke()
 
-  // Specular highlight
   ctx.beginPath()
   ctx.arc(cx - r * 0.28, cy - r * 0.28, r * 0.22, 0, Math.PI * 2)
   ctx.fillStyle = 'rgba(255, 255, 255, 0.22)'
@@ -459,12 +444,10 @@ function drawDoneOrb(
   cx: number,
   cy: number,
   baseRadius: number,
-  size: number
+  _size: number
 ) {
-  // Calm static emerald orb
   const r = baseRadius
 
-  // Outer serene halo
   const halo = ctx.createRadialGradient(cx, cy, r * 0.6, cx, cy, r * 1.35)
   halo.addColorStop(0, 'rgba(0, 220, 130, 0.25)')
   halo.addColorStop(0.6, 'rgba(5, 150, 105, 0.1)')
@@ -474,14 +457,12 @@ function drawDoneOrb(
   ctx.arc(cx, cy, r * 1.35, 0, Math.PI * 2)
   ctx.fill()
 
-  // Calm border ring
   ctx.strokeStyle = 'rgba(0, 220, 130, 0.4)'
   ctx.lineWidth = 1.2
   ctx.beginPath()
   ctx.arc(cx, cy, r * 1.22, 0, Math.PI * 2)
   ctx.stroke()
 
-  // Core gradient: emerald
   const core = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 0.1, cx, cy, r)
   core.addColorStop(0, '#34d399')
   core.addColorStop(0.5, '#059669')
@@ -491,12 +472,10 @@ function drawDoneOrb(
   ctx.arc(cx, cy, r, 0, Math.PI * 2)
   ctx.fill()
 
-  // Core border
   ctx.strokeStyle = 'rgba(0, 220, 130, 0.8)'
   ctx.lineWidth = 2
   ctx.stroke()
 
-  // Calm white checkmark
   ctx.beginPath()
   ctx.moveTo(cx - r * 0.25, cy + r * 0.02)
   ctx.lineTo(cx - r * 0.04, cy + r * 0.23)
@@ -520,7 +499,6 @@ function drawStaticOrb(
 
   switch (state) {
     case 'listening': {
-      // Static emerald
       const ring = baseRadius * 1.25
       ctx.strokeStyle = 'rgba(0, 220, 130, 0.4)'
       ctx.lineWidth = 1.5
@@ -543,7 +521,6 @@ function drawStaticOrb(
       break
     }
     case 'thinking': {
-      // Static amber with static dashed ring
       ctx.save()
       ctx.setLineDash([8, 6])
       ctx.strokeStyle = '#f59e0b'
@@ -568,7 +545,6 @@ function drawStaticOrb(
       break
     }
     case 'speaking': {
-      // Static indigo / violet with static outer ring
       ctx.strokeStyle = 'rgba(139, 92, 246, 0.4)'
       ctx.lineWidth = 1.5
       ctx.beginPath()
@@ -596,7 +572,6 @@ function drawStaticOrb(
     }
     case 'idle':
     default: {
-      // Static slate / indigo
       ctx.strokeStyle = 'rgba(148, 163, 184, 0.3)'
       ctx.lineWidth = 1
       ctx.beginPath()
@@ -632,7 +607,6 @@ export function VoiceOrb({
   const levelSourceRef = useRef(levelSource)
   levelSourceRef.current = levelSource
 
-  // Track prefers-reduced-motion
   const [isReducedMotion, setIsReducedMotion] = useState(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return false
     return window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -675,7 +649,6 @@ export function VoiceOrb({
       const rawLevel = levelSourceRef.current ? levelSourceRef.current() : 0
       const targetLevel = Math.max(0, Math.min(1, isNaN(rawLevel) ? 0 : rawLevel))
 
-      // Smoothed scale per spec: 1 + level * 0.35 (lerp factor ~0.18)
       smoothedLevel += (targetLevel - smoothedLevel) * 0.18
       const scale = 1 + smoothedLevel * 0.35
 
@@ -684,10 +657,8 @@ export function VoiceOrb({
       const baseRadius = size * 0.26
 
       if (isReducedMotion) {
-        // Static rendering for prefers-reduced-motion
         drawStaticOrb(ctx, currentState, cx, cy, baseRadius, size)
       } else {
-        // Dynamic per-state animations
         switch (currentState) {
           case 'idle':
             drawIdleOrb(ctx, time, cx, cy, baseRadius, size)
@@ -711,10 +682,8 @@ export function VoiceOrb({
     }
 
     if (isReducedMotion || state === 'done') {
-      // Draw single static frame without animation loop (done orb is static)
       drawFrame(0)
     } else {
-      // Run continuous rAF loop
       let isMounted = true
       const loop = (time: number) => {
         if (!isMounted) return
@@ -753,32 +722,32 @@ function VerdictBadge({ verdict }: { verdict: Verdict }) {
   switch (verdict) {
     case 'strong':
       return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-600/70">
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-600/70 select-none">
           Strong
         </span>
       )
     case 'partial':
       return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-600/70">
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-600/70 select-none">
           Partial
         </span>
       )
     case 'weak':
       return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-red-950/80 text-red-300 border border-red-600/70">
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-red-950/80 text-red-300 border border-red-600/70 select-none">
           Weak
         </span>
       )
     case 'no_answer':
       return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-deep-slate text-muted-fog border border-steel-outline">
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-deep-slate text-muted-fog border border-steel-outline select-none">
           No Answer
         </span>
       )
     case 'start':
     default:
       return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-deep-slate text-pale-frost border border-steel-outline">
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-deep-slate text-pale-frost border border-steel-outline select-none">
           Start
         </span>
       )
@@ -786,19 +755,71 @@ function VerdictBadge({ verdict }: { verdict: Verdict }) {
 }
 
 /**
- * 4. QuestionCard
- * Topic chip, depth chip, muted ack_text, bold large question_text, aria-live='polite'
+ * Helper to render word-by-word karaoke highlighting
+ */
+function renderKaraokeSpans(
+  text: string,
+  startWordOffset: number,
+  activeWordIdx: number,
+  isSpeaking: boolean,
+  baseClassName: string
+) {
+  if (!text) return null
+  if (!isSpeaking) {
+    return <span className={baseClassName}>{text}</span>
+  }
+
+  // Preserve spacing and punctuation
+  const tokens = text.split(/(\s+)/)
+  let wordCount = 0
+
+  return (
+    <span className={baseClassName}>
+      {tokens.map((token, i) => {
+        if (/^\s+$/.test(token)) {
+          return <React.Fragment key={i}>{token}</React.Fragment>
+        }
+        const currentGlobalWord = startWordOffset + wordCount
+        wordCount++
+        const isSpoken = currentGlobalWord <= activeWordIdx
+        const isCurrent = currentGlobalWord === activeWordIdx
+
+        return (
+          <span
+            key={i}
+            className={`transition-colors duration-100 ${
+              isCurrent
+                ? 'font-extrabold text-nuxt-signal bg-nuxt-signal/20 px-0.5 rounded shadow-sm'
+                : isSpoken
+                ? 'font-bold text-signal-white'
+                : 'text-pale-frost/50 font-normal'
+            }`}
+          >
+            {token}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
+/**
+ * 4. QuestionCard with word-by-word karaoke bolding
  */
 function QuestionCard({
   turn,
   onStartViva,
   busy,
   disabled,
+  panelState,
+  karaokeProgress,
 }: {
   turn: ExaminerTurnLike | null
   onStartViva?: () => void
   busy: boolean
   disabled: boolean
+  panelState: PanelState
+  karaokeProgress: number
 }) {
   if (!turn) {
     if (onStartViva) {
@@ -811,7 +832,7 @@ function QuestionCard({
             type="button"
             onClick={onStartViva}
             disabled={busy || disabled}
-            className="rounded-md bg-nuxt-signal px-4 py-1.5 text-xs font-semibold text-void-canvas hover:opacity-90 disabled:opacity-40 transition active:scale-95"
+            className="rounded-md bg-nuxt-signal px-4 py-1.5 text-xs font-semibold text-void-canvas hover:opacity-90 disabled:opacity-40 transition active:scale-95 select-none"
           >
             Start Viva (Question 1)
           </button>
@@ -826,13 +847,26 @@ function QuestionCard({
     )
   }
 
+  const isSpeaking = panelState === 'speaking'
+
+  // Calculate word counts for sequential karaoke progression across ack_text then question_text
+  // (plain values, not hooks: this runs after the early return above)
+  const ackWords = turn.ack_text ? turn.ack_text.trim().split(/\s+/).filter(Boolean) : []
+  const questionWords = turn.question_text ? turn.question_text.trim().split(/\s+/).filter(Boolean) : []
+  const totalWords = ackWords.length + questionWords.length
+
+  const activeWordIdx =
+    isSpeaking && totalWords > 0
+      ? Math.min(totalWords - 1, Math.floor(karaokeProgress * totalWords))
+      : -1
+
   return (
     <article
       className="panel shrink-0 p-3 bg-midnight-panel border border-steel-outline rounded-lg flex flex-col gap-2"
       aria-label="Current examiner question"
     >
       {/* Chips Header */}
-      <div className="flex items-center gap-1.5 flex-wrap">
+      <div className="flex items-center gap-1.5 flex-wrap select-none">
         <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-deep-slate text-nuxt-signal border border-steel-outline truncate max-w-[200px]">
           {turn.topic}
         </span>
@@ -844,26 +878,32 @@ function QuestionCard({
         </span>
       </div>
 
-      {/* Muted ack_text */}
+      {/* Muted ack_text with karaoke bolding */}
       {turn.ack_text && (
         <p className="text-xs text-muted-fog italic border-l-2 border-nuxt-signal/50 pl-2.5 py-0.5 bg-void-canvas/30 rounded-r">
-          "{turn.ack_text}"
+          "{renderKaraokeSpans(turn.ack_text, 0, activeWordIdx, isSpeaking, 'leading-relaxed')}"
         </p>
       )}
 
-      {/* Bold Large question_text with aria-live="polite" */}
+      {/* Bold Large question_text with aria-live="polite" and karaoke bolding */}
       <div
         aria-live="polite"
         aria-atomic="true"
         className="font-semibold text-sm sm:text-base text-signal-white leading-relaxed"
       >
-        {turn.question_text}
+        {renderKaraokeSpans(
+          turn.question_text,
+          ackWords.length,
+          activeWordIdx,
+          isSpeaking,
+          'leading-relaxed'
+        )}
       </div>
 
-      {/* Extra grounding highlight pill if present */}
+      {/* Code grounding highlight pill if present */}
       {turn.highlight && (
         <div className="flex items-center gap-1.5 text-[10px] font-mono text-muted-fog bg-void-canvas/80 px-2 py-1 rounded border border-steel-outline/80 mt-0.5">
-          <span className="text-nuxt-signal">📍</span>
+          <span className="text-nuxt-signal select-none">📍</span>
           <span className="truncate">
             {turn.highlight.file_path}: Lines {turn.highlight.line_start}–
             {turn.highlight.line_end}
@@ -876,7 +916,6 @@ function QuestionCard({
 
 /**
  * 5. Done State Card
- * 'Viva complete' + 'View report' button -> onRequestReport
  */
 function DoneCard({ onRequestReport }: { onRequestReport?: () => void }) {
   return (
@@ -885,7 +924,7 @@ function DoneCard({ onRequestReport }: { onRequestReport?: () => void }) {
       aria-label="Viva completion status"
     >
       <div className="flex items-center justify-center gap-2">
-        <span className="text-xl text-nuxt-signal">🎉</span>
+        <span className="text-xl text-nuxt-signal select-none">🎉</span>
         <h3 className="font-bold text-signal-white text-base tracking-tight">
           Viva complete
         </h3>
@@ -899,7 +938,7 @@ function DoneCard({ onRequestReport }: { onRequestReport?: () => void }) {
         <button
           type="button"
           onClick={onRequestReport}
-          className="mt-1 w-full py-2 px-3 rounded-md bg-nuxt-signal text-void-canvas font-bold text-xs hover:bg-vue-link active:scale-[0.98] transition shadow"
+          className="mt-1 w-full py-2 px-3 rounded-md bg-nuxt-signal text-void-canvas font-bold text-xs hover:bg-vue-link active:scale-[0.98] transition shadow select-none"
         >
           View report
         </button>
@@ -909,14 +948,9 @@ function DoneCard({ onRequestReport }: { onRequestReport?: () => void }) {
 }
 
 /**
- * 6. Collapsible TranscriptHistory
- * Question + student transcript + verdict badge
+ * 6. Collapsible TranscriptHistory (Text remains fully selectable)
  */
-function TranscriptHistory({
-  history,
-}: {
-  history: ExaminerTurnLike[]
-}) {
+function TranscriptHistory({ history }: { history: ExaminerTurnLike[] }) {
   const [isExpanded, setIsExpanded] = useState(true)
 
   if (history.length === 0) {
@@ -956,8 +990,7 @@ function TranscriptHistory({
               key={`${item.session_id}-${idx}`}
               className="rounded bg-deep-slate/50 p-2.5 border border-steel-outline/80 text-xs flex flex-col gap-1.5"
             >
-              {/* Item Header */}
-              <div className="flex items-center justify-between gap-1 text-[11px]">
+              <div className="flex items-center justify-between gap-1 text-[11px] select-none">
                 <div className="flex items-center gap-1.5">
                   <span className="font-mono text-muted-fog font-semibold">
                     #{idx + 1}
@@ -972,18 +1005,18 @@ function TranscriptHistory({
                 <VerdictBadge verdict={item.verdict} />
               </div>
 
-              {/* Question Text */}
+              {/* Question Text (Selectable) */}
               <p className="text-signal-white text-[11px] leading-relaxed">
-                <span className="text-muted-fog font-mono font-semibold">
+                <span className="text-muted-fog font-mono font-semibold select-none">
                   Q:{' '}
                 </span>
                 {item.question_text}
               </p>
 
-              {/* Student Transcript */}
+              {/* Student Transcript (Selectable) */}
               {item.student_transcript ? (
                 <p className="text-pale-frost text-[11px] leading-relaxed bg-void-canvas/50 p-1.5 rounded border border-steel-outline/50">
-                  <span className="text-nuxt-signal font-mono font-semibold">
+                  <span className="text-nuxt-signal font-mono font-semibold select-none">
                     A:{' '}
                   </span>
                   "{item.student_transcript}"
@@ -994,7 +1027,6 @@ function TranscriptHistory({
                 </p>
               )}
 
-              {/* Ack text if present */}
               {item.ack_text && (
                 <p className="text-muted-fog text-[10px] italic border-l border-steel-outline pl-1.5 mt-0.5">
                   Ack: {item.ack_text}
@@ -1010,62 +1042,84 @@ function TranscriptHistory({
 
 /**
  * 7. PushToTalkButton
- * Press-and-hold with mouse / touch, label 'Hold Space to answer'
  */
 function PushToTalkButton({
   isPressed,
+  status,
+  panelState,
   onPressStart,
   onPressEnd,
   disabled,
 }: {
   isPressed: boolean
+  status: RecorderStatus
+  panelState: PanelState
   onPressStart: () => void
   onPressEnd: () => void
   disabled: boolean
 }) {
+  const isDenied = status === 'denied'
+  const isThinking = panelState === 'thinking'
+  const isSpeaking = panelState === 'speaking'
+
   return (
     <button
       type="button"
-      disabled={disabled}
+      disabled={disabled || isDenied || isThinking}
       onPointerDown={(e) => {
         e.preventDefault()
-        if (!disabled) onPressStart()
+        if (!disabled && !isDenied && !isThinking) onPressStart()
       }}
       onPointerUp={(e) => {
         e.preventDefault()
-        if (!disabled) onPressEnd()
+        if (!disabled && !isDenied && !isThinking) onPressEnd()
       }}
       onPointerLeave={() => {
         if (isPressed) onPressEnd()
       }}
       className={`shrink-0 flex items-center justify-center gap-2 rounded-md py-2.5 px-3 text-xs font-semibold border transition select-none ${
-        disabled
+        disabled || isDenied || isThinking
           ? 'opacity-40 cursor-not-allowed bg-deep-slate border-steel-outline text-muted-fog'
-          : isPressed
+          : isPressed || panelState === 'listening'
           ? 'bg-red-600 text-white border-red-500 shadow-[0_0_16px_rgba(239,68,68,0.5)] scale-[0.99]'
+          : isSpeaking
+          ? 'bg-deep-slate text-indigo-300 border-indigo-500/70 hover:bg-steel-outline'
           : 'bg-deep-slate text-pale-frost border-steel-outline hover:bg-steel-outline hover:text-signal-white active:bg-nuxt-signal active:text-void-canvas'
       }`}
     >
-      <span className="text-sm">{isPressed ? '🔴' : '🎙️'}</span>
-      <span>{isPressed ? 'Listening… Release to answer' : 'Hold Space to answer'}</span>
+      <span className="text-sm">
+        {isDenied ? '❌' : isPressed || panelState === 'listening' ? '🔴' : isThinking ? '⏳' : isSpeaking ? '🎙️' : '🎙️'}
+      </span>
+      <span>
+        {isDenied
+          ? 'Microphone access denied'
+          : isPressed || panelState === 'listening'
+          ? 'Listening… Release to answer'
+          : isThinking
+          ? 'Evaluating response…'
+          : isSpeaking
+          ? 'Hold Space to barge in & answer'
+          : 'Hold Space to answer'}
+      </span>
     </button>
   )
 }
 
 /**
- * 8. TextFallbackInput
- * Enter submits, Shift+Enter newline
+ * 8. TextFallbackInput (Enter submits, Shift+Enter newline)
  */
 function TextFallbackInput({
   value,
   onChange,
   onSubmit,
   disabled,
+  isPrimary,
 }: {
   value: string
   onChange: (val: string) => void
   onSubmit: () => void
   disabled: boolean
+  isPrimary?: boolean
 }) {
   const textareaId = useId()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1098,13 +1152,21 @@ function TextFallbackInput({
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
         disabled={disabled}
-        placeholder="Type answer (Enter to send, Shift+Enter newline)…"
-        className="min-w-0 flex-1 resize-none rounded bg-void-canvas px-3 py-1.5 text-xs text-pale-frost border border-steel-outline placeholder:text-blue-steel focus:outline-none focus:border-nuxt-signal disabled:opacity-40 leading-normal max-h-20"
+        placeholder={
+          isPrimary
+            ? 'Type your answer here (Enter to submit, Shift+Enter newline)…'
+            : 'Type answer (Enter to send, Shift+Enter newline)…'
+        }
+        className={`min-w-0 flex-1 resize-none rounded bg-void-canvas px-3 py-1.5 text-xs text-pale-frost border placeholder:text-blue-steel focus:outline-none disabled:opacity-40 leading-normal max-h-20 ${
+          isPrimary
+            ? 'border-nuxt-signal focus:border-nuxt-signal ring-1 ring-nuxt-signal/40'
+            : 'border-steel-outline focus:border-nuxt-signal'
+        }`}
       />
       <button
         type="submit"
         disabled={disabled || !value.trim()}
-        className="rounded px-3 py-1.5 text-xs font-semibold bg-deep-slate border border-steel-outline text-pale-frost hover:bg-steel-outline hover:text-signal-white disabled:opacity-40 transition active:scale-95"
+        className="rounded px-3 py-1.5 text-xs font-semibold bg-deep-slate border border-steel-outline text-pale-frost hover:bg-steel-outline hover:text-signal-white disabled:opacity-40 transition active:scale-95 select-none"
       >
         Send
       </button>
@@ -1113,7 +1175,7 @@ function TextFallbackInput({
 }
 
 /**
- * Main ExaminerPanel Component
+ * Main ExaminerPanel Component per CONTEXT §5.9
  */
 export default function ExaminerPanel({
   initialTurn,
@@ -1123,80 +1185,607 @@ export default function ExaminerPanel({
   onRequestReport,
   fillersUrl = '/api/voice/fillers',
   disabled = false,
-  sessionId,
-  mode,
+  sessionId: _sessionId,
+  mode: _mode,
   turn,
-  history = [],
+  history,
   busy = false,
   onStartViva,
   forceState,
-  levelSource,
+  levelSource: externalLevelSource,
 }: ExaminerPanelProps) {
-  // Active turn: supports both initialTurn (M3 harness) and turn (M4 App.tsx)
-  const activeTurn = initialTurn ?? turn ?? null
+  // Current active turn state
+  const [activeTurn, setActiveTurn] = useState<ExaminerTurnLike | null>(
+    () => initialTurn ?? turn ?? null
+  )
 
-  // Push-to-talk button press tracking
-  const [isPressed, setIsPressed] = useState(false)
-  const [typedInput, setTypedInput] = useState('')
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  // Internal transcript history
+  const [internalHistory, setInternalHistory] = useState<ExaminerTurnLike[]>(() => {
+    if (history && history.length > 0) return history
+    const first = initialTurn ?? turn
+    return first ? [first] : []
+  })
+  const internalHistoryRef = useRef(internalHistory)
+  internalHistoryRef.current = internalHistory
 
-  // Compute effective panel state
-  const panelState: PanelState = useMemo(() => {
+  // Error and notice state: named error / setError per escalation spec
+  const [error, setError] = useState<string | null>(null)
+  const inlineError = error
+  const setInlineError = setError
+
+  // Synchronize external props into state when updated by parent and clear error on new turn
+  useEffect(() => {
+    const next = initialTurn ?? turn ?? null
+    if (next) {
+      setActiveTurn(next)
+      setError(null)
+    }
+  }, [initialTurn, turn])
+
+  // Clear error inside any useEffect that processes a successful new turn
+  useEffect(() => {
+    if (activeTurn) {
+      setError(null)
+    }
+  }, [activeTurn])
+
+  useEffect(() => {
+    if (history && history.length > 0) {
+      setInternalHistory(history)
+    }
+  }, [history])
+
+  // Turn-flow state: 'idle' | 'listening' | 'thinking' | 'speaking' | 'done'
+  const [panelState, setPanelState] = useState<PanelState>(() => {
     if (forceState) return forceState
-    if (disabled) return 'idle'
-    if (activeTurn?.done) return 'done'
-    if (busy || isSubmitting) return 'thinking'
-    if (isPressed) return 'listening'
+    const initial = initialTurn ?? turn
+    if (initial?.done) return 'done'
     return 'idle'
-  }, [forceState, disabled, activeTurn?.done, busy, isSubmitting, isPressed])
+  })
+
+  // Synchronize forceState for dev testing if provided
+  useEffect(() => {
+    if (forceState) {
+      setPanelState(forceState)
+    }
+  }, [forceState])
+
+  // Word-by-word karaoke tracking
+  const [karaokeProgress, setKaraokeProgress] = useState(0)
+
+  // Inputs and UI states
+  const [typedInput, setTypedInput] = useState('')
+  const [inlineWarning, setInlineWarning] = useState<string | null>(null)
+
+  // Callback refs updated on every render so ExaminerPanel never invokes stale closures from mount
+  const onSubmitAudioRef = useRef(onSubmitAudio)
+  onSubmitAudioRef.current = onSubmitAudio
+  const onSubmitTextRef = useRef(onSubmitText)
+  onSubmitTextRef.current = onSubmitText
+  const onTurnRef = useRef(onTurn)
+  onTurnRef.current = onTurn
+
+  // State & props refs for keyboard and event listeners
+  const panelStateRef = useRef(panelState)
+  panelStateRef.current = panelState
+  const disabledRef = useRef(disabled)
+  disabledRef.current = disabled
+  const busyRef = useRef(busy)
+  busyRef.current = busy
+  const recorderRef = useRef<ReturnType<typeof usePushToTalkRecorder> | null>(null)
+
+  // Submissions and late response guard
+  type LastSubmission =
+    | { type: 'audio'; audio: RecordedAudio }
+    | { type: 'text'; text: string }
+
+  const lastSubmissionRef = useRef<LastSubmission | null>(null)
+  const requestIdRef = useRef(0)
+  const isMountedRef = useRef(true)
+
+  // Active audio playback references
+  const activePlaybackRef = useRef<AudioPlayback | null>(null)
+  const activeFillerRef = useRef<AudioPlayback | null>(null)
+  const karaokeRafRef = useRef<number | null>(null)
+
+  // Pre-cached filler clips fetched once on mount
+  const fillersRef = useRef<Array<{ id: string; text: string; audio_base64: string }>>([])
+
+  // StrictMode double-speak guard on initialTurn mount
+  const initialTurnSpokenRef = useRef(false)
+
+  // Fetch fillers once from fillersUrl; failure ignored silently per spec
+  useEffect(() => {
+    let mounted = true
+    if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
+      fetch(fillersUrl)
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data: unknown) => {
+          if (mounted && Array.isArray(data)) {
+            fillersRef.current = data
+          }
+        })
+        .catch(() => {
+          // Failure ignored silently per CONTEXT §5.9 / TASKS B6
+        })
+    }
+    return () => {
+      mounted = false
+    }
+  }, [fillersUrl])
+
+  // Cleanup helper for all playback and animation frames
+  const stopCurrentPlayback = useCallback(() => {
+    if (karaokeRafRef.current) {
+      cancelAnimationFrame(karaokeRafRef.current)
+      karaokeRafRef.current = null
+    }
+    if (activePlaybackRef.current) {
+      try {
+        activePlaybackRef.current.stop()
+      } catch {}
+      activePlaybackRef.current = null
+    }
+    if (activeFillerRef.current) {
+      try {
+        activeFillerRef.current.stop()
+      } catch {}
+      activeFillerRef.current = null
+    }
+    stopAllPlayback()
+  }, [])
+
+  // Mount lifecycle: mount tracking and unmount cleanup
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+      requestIdRef.current++
+      stopCurrentPlayback()
+    }
+  }, [stopCurrentPlayback])
+
+  /**
+   * Speaks a turn with audio_base64 or browser TTS fallback, syncing word karaoke
+   */
+  const speakTurn = useCallback(
+    (turnToSpeak: ExaminerTurnLike, isDoneTurn = false) => {
+      stopCurrentPlayback()
+      unlockAudio()
+
+      setPanelState(isDoneTurn ? 'done' : 'speaking')
+      setKaraokeProgress(0)
+
+      const spokenText = buildSpokenText(turnToSpeak.ack_text, turnToSpeak.question_text)
+      const pb =
+        turnToSpeak.audio_base64 && turnToSpeak.audio_base64.trim()
+          ? playBase64Audio(turnToSpeak.audio_base64)
+          : speakWithBrowserTTS(spokenText)
+
+      activePlaybackRef.current = pb
+
+      // Synchronize word-by-word karaoke progress at 60fps
+      const syncKaraoke = () => {
+        if (!isMountedRef.current) return
+        if (activePlaybackRef.current === pb) {
+          const p = pb.getProgress()
+          setKaraokeProgress(p)
+          karaokeRafRef.current = requestAnimationFrame(syncKaraoke)
+        }
+      }
+      karaokeRafRef.current = requestAnimationFrame(syncKaraoke)
+
+      pb.done.then(() => {
+        if (!isMountedRef.current) return
+        if (karaokeRafRef.current) {
+          cancelAnimationFrame(karaokeRafRef.current)
+          karaokeRafRef.current = null
+        }
+        setKaraokeProgress(1)
+        if (activePlaybackRef.current === pb) {
+          activePlaybackRef.current = null
+          if (!isDoneTurn) {
+            setPanelState('idle')
+          }
+        }
+      })
+    },
+    [stopCurrentPlayback]
+  )
+
+  // Flow: initialTurn spoken once on mount (after unlockAudio; guard against StrictMode double-speak) -> idle
+  useEffect(() => {
+    const turnToSpeak = initialTurn ?? turn
+    if (!turnToSpeak || initialTurnSpokenRef.current) return
+
+    initialTurnSpokenRef.current = true
+    unlockAudio()
+    speakTurn(turnToSpeak, Boolean(turnToSpeak.done))
+    const spokenPlayback = activePlaybackRef.current
+
+    return () => {
+      // In React 18 StrictMode, mount runs -> unmount cleanup runs immediately -> remount runs.
+      // Halting playback and resetting flag lets the true remount speak cleanly without double-speak.
+      // Only stop our own playback: a newer turn's speech must survive the parent's prop update.
+      if (activePlaybackRef.current === spokenPlayback) stopCurrentPlayback()
+      if (internalHistoryRef.current.length <= 1) {
+        initialTurnSpokenRef.current = false
+      }
+    }
+  }, [initialTurn, turn, speakTurn, stopCurrentPlayback])
+
+  /**
+   * Plays a random latency-hiding filler immediately when entering thinking state
+   */
+  const playRandomFiller = useCallback(() => {
+    if (activeFillerRef.current) {
+      activeFillerRef.current.stop()
+      activeFillerRef.current = null
+    }
+
+    const available = fillersRef.current.filter((f) => f && f.audio_base64)
+    if (available.length > 0) {
+      const chosen = available[Math.floor(Math.random() * available.length)]
+      if (chosen.audio_base64) {
+        unlockAudio()
+        activeFillerRef.current = playBase64Audio(chosen.audio_base64)
+      }
+    }
+  }, [])
+
+  /**
+   * Processes an incoming response turn
+   */
+  const handleTurnResponse = useCallback(
+    (nextTurn: ExaminerTurnLike) => {
+      // Clear any failure banner cleanly on successful response
+      setError(null)
+
+      // Check verdict and transcript for "Didn't catch that" warning
+      if (
+        nextTurn.verdict === 'no_answer' ||
+        !nextTurn.student_transcript ||
+        !nextTurn.student_transcript.trim()
+      ) {
+        setInlineWarning("Didn't catch that — try again or type")
+      } else {
+        setInlineWarning(null)
+      }
+
+      // Push to history
+      setInternalHistory((prev) => [...prev, nextTurn])
+
+      // Set active turn
+      setActiveTurn(nextTurn)
+
+      // Call onTurn once per spec via ref
+      onTurnRef.current?.(nextTurn)
+
+      // Handle done state or speak response
+      if (nextTurn.done) {
+        setPanelState('done')
+        speakTurn(nextTurn, true)
+      } else {
+        speakTurn(nextTurn, false)
+      }
+    },
+    [speakTurn]
+  )
+
+  /**
+   * Handles audio answer submission via push-to-talk recording
+   */
+  const handleAudioSubmit = useCallback(
+    async (rec: RecordedAudio) => {
+      if (panelStateRef.current === 'thinking') return
+
+      // Explicitly call setError(null) immediately inside handleAudioSubmit before awaiting parent props
+      setError(null)
+      setInlineWarning(null)
+      stopCurrentPlayback()
+      setPanelState('thinking')
+
+      playRandomFiller()
+      lastSubmissionRef.current = { type: 'audio', audio: rec }
+      const currentReqId = ++requestIdRef.current
+
+      try {
+        const submitFn = onSubmitAudioRef.current
+        if (!submitFn) {
+          throw new Error('No onSubmitAudio handler provided to ExaminerPanel')
+        }
+        const nextTurn = await submitFn(rec)
+
+        // Ignore late responses arriving after cancellation or unmount
+        if (!isMountedRef.current || requestIdRef.current !== currentReqId) return
+
+        if (activeFillerRef.current) {
+          activeFillerRef.current.stop()
+          activeFillerRef.current = null
+        }
+
+        // Cleanly clear error banner on successful receipt
+        setError(null)
+        handleTurnResponse(nextTurn)
+      } catch (err: unknown) {
+        if (!isMountedRef.current || requestIdRef.current !== currentReqId) return
+
+        if (activeFillerRef.current) {
+          activeFillerRef.current.stop()
+          activeFillerRef.current = null
+        }
+
+        setPanelState('idle')
+        const errMsg = err instanceof Error ? err.message : 'Submission failed. Please try again.'
+        setError(errMsg)
+      }
+    },
+    [stopCurrentPlayback, playRandomFiller, handleTurnResponse]
+  )
+  const handleAudioRecorded = handleAudioSubmit
+
+  /**
+   * Handles typed text answer submission
+   */
+  const handleTextSubmit = useCallback(async () => {
+    const text = typedInput.trim()
+    if (
+      !text ||
+      panelStateRef.current === 'thinking' ||
+      disabledRef.current ||
+      busyRef.current ||
+      panelStateRef.current === 'done'
+    ) {
+      return
+    }
+
+    // Explicitly call setError(null) immediately inside handleTextSubmit before awaiting parent props
+    setError(null)
+    setInlineWarning(null)
+    stopCurrentPlayback()
+    setPanelState('thinking')
+    setTypedInput('')
+
+    playRandomFiller()
+    lastSubmissionRef.current = { type: 'text', text }
+    const currentReqId = ++requestIdRef.current
+
+    try {
+      const submitFn = onSubmitTextRef.current
+      if (!submitFn) {
+        throw new Error('No onSubmitText handler provided to ExaminerPanel')
+      }
+      const nextTurn = await submitFn(text)
+
+      if (!isMountedRef.current || requestIdRef.current !== currentReqId) return
+
+      if (activeFillerRef.current) {
+        activeFillerRef.current.stop()
+        activeFillerRef.current = null
+      }
+
+      // Cleanly clear error banner on successful receipt
+      setError(null)
+      handleTurnResponse(nextTurn)
+    } catch (err: unknown) {
+      if (!isMountedRef.current || requestIdRef.current !== currentReqId) return
+
+      if (activeFillerRef.current) {
+        activeFillerRef.current.stop()
+        activeFillerRef.current = null
+      }
+
+      setPanelState('idle')
+      const errMsg = err instanceof Error ? err.message : 'Submission failed. Please try again.'
+      setError(errMsg)
+    }
+  }, [
+    typedInput,
+    stopCurrentPlayback,
+    playRandomFiller,
+    handleTurnResponse,
+  ])
+
+  /**
+   * Retries the same last recording or typed text
+   */
+  const handleRetry = useCallback(() => {
+    const lastSub = lastSubmissionRef.current
+    if (!lastSub || panelStateRef.current === 'thinking') return
+
+    // Explicitly call setError(null) immediately inside handleRetry before awaiting parent props
+    setError(null)
+    setInlineWarning(null)
+
+    if (lastSub.type === 'audio') {
+      void handleAudioSubmit(lastSub.audio)
+    } else {
+      void (async () => {
+        // Explicitly call setError(null) immediately inside handleRetry before awaiting parent props
+        setError(null)
+        setInlineWarning(null)
+        stopCurrentPlayback()
+        setPanelState('thinking')
+        playRandomFiller()
+        const currentReqId = ++requestIdRef.current
+        try {
+          const submitFn = onSubmitTextRef.current
+          if (!submitFn) throw new Error('No onSubmitText handler provided to ExaminerPanel')
+          const nextTurn = await submitFn(lastSub.text)
+          if (!isMountedRef.current || requestIdRef.current !== currentReqId) return
+          if (activeFillerRef.current) {
+            activeFillerRef.current.stop()
+            activeFillerRef.current = null
+          }
+          // Cleanly clear error banner on successful receipt
+          setError(null)
+          handleTurnResponse(nextTurn)
+        } catch (err: unknown) {
+          if (!isMountedRef.current || requestIdRef.current !== currentReqId) return
+          if (activeFillerRef.current) {
+            activeFillerRef.current.stop()
+            activeFillerRef.current = null
+          }
+          setPanelState('idle')
+          const errMsg = err instanceof Error ? err.message : 'Submission failed'
+          setError(errMsg)
+        }
+      })()
+    }
+  }, [handleAudioSubmit, stopCurrentPlayback, playRandomFiller, handleTurnResponse])
+
+  // Hook instance under test (Task B2 & B6)
+  const isHookEnabled = !disabled && panelState !== 'done' && panelState !== 'thinking'
+
+  const recorder = usePushToTalkRecorder({
+    enabled: isHookEnabled,
+    bindSpacebar: isHookEnabled,
+    minDurationMs: 300,
+    maxDurationMs: 60000,
+    onRecordingComplete: (rec) => {
+      void handleAudioRecorded(rec)
+    },
+    onTooShort: () => {
+      setInlineWarning("Didn't catch that — try again or type")
+      if (panelStateRef.current === 'listening') {
+        setPanelState('idle')
+      }
+    },
+  })
+  recorderRef.current = recorder
+
+  // Barge-in: Space or recording while speaking immediately stops playback and starts recording
+  useEffect(() => {
+    if (recorder.isRecording) {
+      stopCurrentPlayback()
+      setPanelState('listening')
+    } else if (panelState === 'listening' && !recorder.isRecording) {
+      // Esc cancelled recording or stopped without submission
+      setPanelState('idle')
+    }
+  }, [recorder.isRecording, panelState, stopCurrentPlayback])
+
+  // Global Spacebar guard preventing page scrolling across all states while panel is active,
+  // plus direct barge-in trigger when speaking
+  useEffect(() => {
+    const isSpaceKey = (e: KeyboardEvent) => e.code === 'Space' || e.key === ' '
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isSpaceKey(e)) return
+
+      // Ensure every Spacebar keydown handler calls e.preventDefault() if document.activeElement is not an input/textarea
+      const active = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
+      const isInput =
+        (typeof isTextInputElement === 'function' ? isTextInputElement(active) : shouldIgnoreKeyboardTarget(e)) ||
+        (typeof isTextInputElement === 'function' ? isTextInputElement(e.target as HTMLElement | null) : false)
+
+      if (!isInput) {
+        e.preventDefault()
+      } else {
+        return
+      }
+
+      // If a non-text control (like a checkbox or button) had focus, blur it so Spacebar never toggles or activates it
+      if (active && active !== document.body) {
+        active.blur?.()
+      }
+
+      // Direct barge-in: pressing Space while speaking immediately halts playback & starts recording
+      if (
+        panelStateRef.current === 'speaking' &&
+        !e.repeat &&
+        !disabledRef.current &&
+        !busyRef.current
+      ) {
+        stopCurrentPlayback()
+        recorderRef.current?.startRecording()
+      }
+    }
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (!isSpaceKey(e)) return
+
+      // Ensure every Spacebar keyup handler calls e.preventDefault() if document.activeElement is not an input/textarea
+      const active = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
+      const isInput =
+        (typeof isTextInputElement === 'function' ? isTextInputElement(active) : shouldIgnoreKeyboardTarget(e)) ||
+        (typeof isTextInputElement === 'function' ? isTextInputElement(e.target as HTMLElement | null) : false)
+
+      if (!isInput) {
+        e.preventDefault()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown, { capture: true, passive: false })
+    window.addEventListener('keyup', handleKeyUp, { capture: true, passive: false })
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, { capture: true })
+      window.removeEventListener('keyup', handleKeyUp, { capture: true })
+    }
+  }, [stopCurrentPlayback])
+
+  // Escape key handler to cancel in-flight submission or recording
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (panelState === 'thinking') {
+          // Cancel in-flight request
+          requestIdRef.current++
+          if (activeFillerRef.current) {
+            activeFillerRef.current.stop()
+            activeFillerRef.current = null
+          }
+          setPanelState('idle')
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [panelState])
+
+  // Push-to-talk mouse/touch handlers with barge-in support
+  const [isMousePressed, setIsMousePressed] = useState(false)
+
+  const handlePressStart = useCallback(() => {
+    if (disabled || busy || panelState === 'thinking' || panelState === 'done') return
+
+    // Barge-in if speaking
+    if (panelState === 'speaking') {
+      stopCurrentPlayback()
+    }
+
+    setIsMousePressed(true)
+    recorder.startRecording()
+  }, [disabled, busy, panelState, stopCurrentPlayback, recorder])
+
+  const handlePressEnd = useCallback(() => {
+    if (!isMousePressed && !recorder.isRecording) return
+    setIsMousePressed(false)
+    recorder.stopRecording()
+  }, [isMousePressed, recorder])
+
+  // Pass live audio levels to VoiceOrb per B5 review note:
+  // return recorder.getInputLevel() while listening, active playback.getLevel() while speaking, 0 otherwise
+  const defaultLevelSource = useCallback((): number => {
+    if (panelState === 'listening') {
+      return recorder.getInputLevel()
+    }
+    if (panelState === 'speaking' && activePlaybackRef.current) {
+      return activePlaybackRef.current.getLevel()
+    }
+    return 0
+  }, [panelState, recorder])
+
+  const effectiveLevelSource = externalLevelSource ?? defaultLevelSource
 
   const currentDepth = activeTurn?.depth_level ?? 1
-
-  // Aggregate transcript history: use prop history if populated; fallback to activeTurn
-  const historyList = useMemo(() => {
-    if (history && history.length > 0) {
-      return history
-    }
-    if (activeTurn) {
-      return [activeTurn]
-    }
-    return []
-  }, [history, activeTurn])
-
-  // Text submit handler
-  const handleTextSubmit = async () => {
-    const text = typedInput.trim()
-    if (!text || isSubmitting || disabled || busy || panelState === 'done') return
-
-    setIsSubmitting(true)
-    try {
-      if (onSubmitText) {
-        const nextTurn = await onSubmitText(text)
-        onTurn?.(nextTurn)
-      }
-      setTypedInput('')
-    } catch {
-      // B6 adds inline error + Retry; keep typed text so nothing is lost
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  // Push to talk handlers for mouse/touch
-  const handlePressStart = () => {
-    if (disabled || busy || panelState === 'done') return
-    setIsPressed(true)
-  }
-
-  const handlePressEnd = () => {
-    if (!isPressed) return
-    setIsPressed(false)
-  }
-
-  const isInputDisabled = disabled || busy || isSubmitting || panelState === 'done'
+  const isInputDisabled =
+    disabled || busy || panelState === 'thinking' || panelState === 'done'
+  const isMicDenied = recorder.status === 'denied'
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col gap-2 p-3 bg-midnight-panel text-pale-frost select-none overflow-hidden font-sans">
+    <div className="flex h-full min-h-0 w-full flex-col gap-2 p-3 bg-midnight-panel text-pale-frost overflow-hidden font-sans">
       {/* 1. Header (title + status pill) */}
       <ExaminerHeader state={panelState} disabled={disabled} />
 
@@ -1204,10 +1793,10 @@ export default function ExaminerPanel({
       <DepthMeter currentDepth={currentDepth} />
 
       {/* 3. Voice Orb */}
-      <div className="shrink-0 flex flex-col items-center justify-center py-1">
+      <div className="shrink-0 flex flex-col items-center justify-center py-1 select-none">
         <VoiceOrb
           state={panelState}
-          levelSource={levelSource ?? (isPressed ? () => 0.6 : () => 0)}
+          levelSource={effectiveLevelSource}
           size={120}
         />
         <span className="mt-0.5 text-[11px] text-muted-fog">
@@ -1219,6 +1808,8 @@ export default function ExaminerPanel({
             ? 'Examiner speaking…'
             : panelState === 'done'
             ? 'Viva complete'
+            : isMicDenied
+            ? 'Type answer below'
             : 'Hold Space to answer'}
         </span>
       </div>
@@ -1232,16 +1823,71 @@ export default function ExaminerPanel({
           onStartViva={onStartViva}
           busy={busy}
           disabled={disabled}
+          panelState={panelState}
+          karaokeProgress={karaokeProgress}
         />
       )}
 
       {/* 5. Transcript History (Collapsible, SCROLLS!) */}
-      <TranscriptHistory history={historyList} />
+      <TranscriptHistory history={internalHistory} />
 
-      {/* 6. Push-to-Talk Button & Text Fallback Input */}
+      {/* 6. Inline Error & Warning Banners */}
+      {error && (
+        <div className="shrink-0 flex items-center justify-between gap-2 p-2 rounded bg-red-950/90 border border-red-600/80 text-xs text-red-200">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-red-400 select-none">⚠️</span>
+            <span className="truncate">{error}</span>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white font-semibold text-[11px] transition active:scale-95 select-none"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="text-red-400 hover:text-red-200 text-xs px-1 font-mono select-none"
+              aria-label="Dismiss error"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {inlineWarning && (
+        <div className="shrink-0 flex items-center justify-between gap-2 p-2 rounded bg-amber-950/80 border border-amber-600/70 text-xs text-amber-200">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-amber-400 select-none">🤔</span>
+            <span>{inlineWarning}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setInlineWarning(null)}
+            className="text-amber-400/80 hover:text-amber-200 text-xs px-1 font-mono select-none"
+            aria-label="Dismiss notice"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {isMicDenied && (
+        <div className="shrink-0 flex items-center gap-1.5 p-2 rounded bg-deep-slate border border-steel-outline text-xs text-pale-frost select-none">
+          <span className="text-amber-400">🎙️❌</span>
+          <span>Microphone access denied. Text input is primary.</span>
+        </div>
+      )}
+
+      {/* 7. Push-to-Talk Button & Text Fallback Input */}
       <div className="shrink-0 flex flex-col gap-1.5 pt-2 border-t border-steel-outline">
         <PushToTalkButton
-          isPressed={isPressed}
+          isPressed={isMousePressed || recorder.isRecording}
+          status={recorder.status}
+          panelState={panelState}
           onPressStart={handlePressStart}
           onPressEnd={handlePressEnd}
           disabled={isInputDisabled}
@@ -1252,6 +1898,7 @@ export default function ExaminerPanel({
           onChange={setTypedInput}
           onSubmit={handleTextSubmit}
           disabled={isInputDisabled}
+          isPrimary={isMicDenied}
         />
       </div>
     </div>

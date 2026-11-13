@@ -108,6 +108,30 @@ export function getPreferredMimeType(): string | undefined {
 }
 
 /**
+ * Checks whether an element is an interactive text input or textarea
+ * where typing space should insert a space character.
+ */
+export function isTextInputElement(el: Element | null | undefined): boolean {
+  if (!el) return false
+  const tagName = el.tagName ? el.tagName.toUpperCase() : ''
+  if (tagName === 'TEXTAREA' || tagName === 'SELECT') {
+    return true
+  }
+  if (tagName === 'INPUT') {
+    const type = ((el as HTMLInputElement).type || 'text').toLowerCase()
+    // Text-entry input types consume Space; checkboxes, buttons, ranges do not
+    return ['text', 'search', 'url', 'password', 'email', 'number', 'tel', ''].includes(type)
+  }
+  if ((el as HTMLElement).isContentEditable || el.getAttribute?.('contenteditable') === 'true') {
+    return true
+  }
+  if (typeof el.closest === 'function' && el.closest('.monaco-editor')) {
+    return true
+  }
+  return false
+}
+
+/**
  * Checks whether the keyboard event target is an interactive text input
  * or inside Monaco Editor, where Spacebar must NOT be intercepted.
  */
@@ -118,15 +142,7 @@ export function shouldIgnoreKeyboardTarget(e: KeyboardEvent): boolean {
   ]
 
   for (const el of elementsToCheck) {
-    if (!el) continue
-    const tagName = el.tagName ? el.tagName.toUpperCase() : ''
-    if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
-      return true
-    }
-    if (el.isContentEditable || (el.getAttribute && el.getAttribute('contenteditable') === 'true')) {
-      return true
-    }
-    if (typeof el.closest === 'function' && el.closest('.monaco-editor')) {
+    if (isTextInputElement(el)) {
       return true
     }
   }
@@ -571,11 +587,12 @@ export function usePushToTalkRecorder(
   useEffect(() => {
     if (typeof window === 'undefined') return
 
+    const isSpaceKey = (e: KeyboardEvent) => e.code === 'Space' || e.key === ' '
+
     const handleKeyDown = (e: KeyboardEvent) => {
       const opts = optionsRef.current
-      if (opts.enabled === false) return
 
-      if (e.code === 'Escape') {
+      if (e.code === 'Escape' || e.key === 'Escape') {
         if (isRecordingRef.current || recordingIntentRef.current) {
           e.preventDefault()
           cancelRecording()
@@ -583,13 +600,28 @@ export function usePushToTalkRecorder(
         return
       }
 
-      if (e.code === 'Space') {
-        if (opts.bindSpacebar === false) return
-        if (e.repeat) return
-        if (shouldIgnoreKeyboardTarget(e)) return
+      if (isSpaceKey(e)) {
+        // Ensure every Spacebar keydown handler calls e.preventDefault() if document.activeElement is not an input/textarea
+        const isInput = shouldIgnoreKeyboardTarget(e)
+        if (!isInput) {
+          e.preventDefault()
+        } else {
+          // Allow native typing inside inputs, textareas, contenteditables, and Monaco
+          return
+        }
 
-        // Prevent page scroll when handling push-to-talk
-        e.preventDefault()
+        // If a non-text element (like a checkbox or button) had browser focus, blur it
+        // so Spacebar never toggles or activates the focused control
+        if (
+          typeof document !== 'undefined' &&
+          document.activeElement &&
+          document.activeElement !== document.body
+        ) {
+          ;(document.activeElement as HTMLElement).blur?.()
+        }
+
+        if (opts.enabled === false || opts.bindSpacebar === false) return
+        if (e.repeat) return
 
         if (!isRecordingRef.current && !recordingIntentRef.current) {
           startRecording()
@@ -599,9 +631,17 @@ export function usePushToTalkRecorder(
 
     // Release always stops, even if enabled/bindSpacebar flipped mid-hold (else stuck until maxDuration)
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code !== 'Space') return
-      if (isRecordingRef.current || recordingIntentRef.current) {
+      if (!isSpaceKey(e)) return
+
+      // Ensure every Spacebar keyup handler calls e.preventDefault() if document.activeElement is not an input/textarea
+      const isInput = shouldIgnoreKeyboardTarget(e)
+      if (!isInput) {
         e.preventDefault()
+      } else {
+        return
+      }
+
+      if (isRecordingRef.current || recordingIntentRef.current) {
         stopRecording()
       }
     }
@@ -611,13 +651,13 @@ export function usePushToTalkRecorder(
       if (isRecordingRef.current || recordingIntentRef.current) stopRecording()
     }
 
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('keydown', handleKeyDown, { capture: true, passive: false })
+    window.addEventListener('keyup', handleKeyUp, { capture: true, passive: false })
     window.addEventListener('blur', handleBlur)
 
     return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('keydown', handleKeyDown, { capture: true })
+      window.removeEventListener('keyup', handleKeyUp, { capture: true })
       window.removeEventListener('blur', handleBlur)
     }
   }, [startRecording, stopRecording, cancelRecording])
@@ -942,6 +982,7 @@ export function speakWithBrowserTTS(text: string): AudioPlayback {
   let latestCharIndex = 0
   let stoppedProgress = 0
   let keepAliveTimer: number | null = null
+  let startFallbackTimer: number | null = null
 
   let resolveDone: () => void
   const done = new Promise<void>((resolve) => {
@@ -952,6 +993,14 @@ export function speakWithBrowserTTS(text: string): AudioPlayback {
     if (keepAliveTimer !== null) {
       window.clearInterval(keepAliveTimer)
       keepAliveTimer = null
+    }
+    if (startFallbackTimer !== null) {
+      if (typeof window !== 'undefined' && typeof window.clearTimeout === 'function') {
+        window.clearTimeout(startFallbackTimer)
+      } else {
+        clearTimeout(startFallbackTimer)
+      }
+      startFallbackTimer = null
     }
     if (activeUtterance === utterance) {
       activeUtterance = null
@@ -992,7 +1041,14 @@ export function speakWithBrowserTTS(text: string): AudioPlayback {
   function getProgress(): number {
     if (isStopped) return stoppedProgress
     if (isEnded) return 1
-    if (!isStarted || !cleanText) return 0
+    if (!cleanText) return 0
+
+    // Gracefully recover start if onstart event never fired in browser
+    if (!isStarted && typeof window !== 'undefined' && window.speechSynthesis?.speaking) {
+      isStarted = true
+      if (!speakStartTime) speakStartTime = performance.now()
+    }
+    if (!isStarted) return 0
 
     const elapsedSec = (performance.now() - speakStartTime) / 1000
 
@@ -1084,6 +1140,19 @@ export function speakWithBrowserTTS(text: string): AudioPlayback {
     }, 10000)
 
     window.speechSynthesis.speak(utterance)
+
+    // Fallback if browser voice fails to trigger onstart
+    const scheduleTimeout =
+      typeof window !== 'undefined' && typeof window.setTimeout === 'function'
+        ? window.setTimeout
+        : setTimeout
+
+    startFallbackTimer = (scheduleTimeout as typeof setTimeout)(() => {
+      if (!isStarted && !isEnded && !isStopped) {
+        isStarted = true
+        if (!speakStartTime) speakStartTime = performance.now()
+      }
+    }, 150) as unknown as number
   } catch (err) {
     console.warn('[speakWithBrowserTTS] SpeechSynthesis failed:', err)
     handleFinish()
