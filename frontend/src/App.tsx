@@ -12,6 +12,7 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went
 
 export default function App() {
   const [session, setSession] = useState<IngestResponse | null>(null)
+  const [pendingFirstTurn, setPendingFirstTurn] = useState<TurnResponse | null>(null)
   const [turn, setTurn] = useState<TurnResponse | null>(null)
   const [history, setHistory] = useState<TurnResponse[]>([])
   const [busy, setBusy] = useState(false)
@@ -36,8 +37,19 @@ export default function App() {
   }, [turn, session])
 
   const begin = (res: IngestResponse) => {
-    setSession(res); setTurn(res.first_turn); setHistory([res.first_turn]); setReport(null)
+    setSession(res)
+    setPendingFirstTurn(res.first_turn)
+    setTurn(null)
+    setHistory([])
+    setReport(null)
   }
+
+  const startViva = useCallback(() => {
+    if (!pendingFirstTurn) return
+    setTurn(pendingFirstTurn)
+    setHistory([pendingFirstTurn])
+    setPendingFirstTurn(null)
+  }, [pendingFirstTurn])
 
   async function guarded(fn: () => Promise<void>) {
     setBusy(true); setError(null)
@@ -54,7 +66,7 @@ export default function App() {
 
   function goHome() {
     if (session && !window.confirm('Leave this viva? Progress is lost unless you press Finish viva first.')) return
-    setSession(null); setTurn(null); setHistory([]); setReport(null); setShowReport(false)
+    setSession(null); setPendingFirstTurn(null); setTurn(null); setHistory([]); setReport(null); setShowReport(false)
     setError(null); setRepoUrl(null); setAuthor(null); setPaperTab('paper'); setHomeKey(k => k + 1)
   }
 
@@ -133,7 +145,7 @@ export default function App() {
         <aside className="min-w-0 basis-[35%] border-l border-steel-outline" aria-label="Examiner">
           <ExaminerPanel
             sessionId={session?.session_id ?? null} mode={session?.mode ?? null}
-            turn={turn} history={history} busy={busy} onTurn={onTurn}
+            turn={turn} history={history} busy={busy} onTurn={onTurn} onStartViva={startViva}
           />
         </aside>
       </main>
