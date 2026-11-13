@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+/* Design tokens: Nuxt style reference. Spacing/radius use Tailwind defaults
+   (4px base, rounded-md = 6px, rounded-lg = 8px) so they already match. */
+@theme {
+  --color-void-canvas: #020618;
+  --color-midnight-panel: #080e21;
+  --color-deep-slate: #0f172b;
+  --color-steel-outline: #1d293d;
+  --color-blue-steel: #314158;
+  --color-muted-fog: #90a1b9;
+  --color-pale-frost: #e2e8f0;
+  --color-signal-white: #ffffff;
+  --color-nuxt-signal: #00dc82;
+  --color-vue-link: #42b883;
+  --color-vite-link: #a156fe;
+  --color-nitro-link: #fb848e;
+
+  --font-sans: 'Public Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+:root { color-scheme: dark; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--color-void-canvas);
+  color: var(--color-muted-fog);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+*:focus-visible { outline: 2px solid var(--color-nuxt-signal); outline-offset: 2px; }
+
+/* Flat panel ring, no blur shadows */
+.panel { background: var(--color-midnight-panel); border-radius: 8px; box-shadow: 0 0 0 1px var(--color-steel-outline); }
+
+/* Monaco: examiner line highlight */
+.vv-line-highlight { background: rgba(0, 220, 130, 0.12); }
+.vv-line-gutter { border-left: 3px solid var(--color-nuxt-signal); margin-left: 3px; }
+
+/* Mermaid: active node + clickable nodes */
+.mermaid-host svg { max-width: 100%; height: auto; }
+.mermaid-host g.node { cursor: pointer; }
+.mermaid-host g.node.vv-active rect,
+.mermaid-host g.node.vv-active polygon,
+.mermaid-host g.node.vv-active circle,
+.mermaid-host g.node.vv-active path {
+  stroke: var(--color-nuxt-signal) !important;
+  stroke-width: 3px !important;
+}
+
+/* Scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--color-blue-steel) transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
