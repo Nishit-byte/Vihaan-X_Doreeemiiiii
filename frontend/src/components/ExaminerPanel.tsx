@@ -31,8 +31,6 @@ import {
   speakWithBrowserTTS,
   stopAllPlayback,
   unlockAudio,
-  shouldIgnoreKeyboardTarget,
-  isTextInputElement,
 } from '../services/audioRecorder'
 
 export type ExaminerTurnLike = TurnResponse
@@ -1282,6 +1280,8 @@ export default function ExaminerPanel({
   const lastSubmissionRef = useRef<LastSubmission | null>(null)
   const requestIdRef = useRef(0)
   const isMountedRef = useRef(true)
+  const isCancelledRef = useRef(false)
+  const isSubmittingRef = useRef(false)
 
   // Active audio playback references
   const activePlaybackRef = useRef<AudioPlayback | null>(null)
@@ -1419,8 +1419,7 @@ export default function ExaminerPanel({
    */
   const playRandomFiller = useCallback(() => {
     if (activeFillerRef.current) {
-      activeFillerRef.current.stop()
-      activeFillerRef.current = null
+      return
     }
 
     const available = fillersRef.current.filter((f) => f && f.audio_base64)
@@ -1477,12 +1476,12 @@ export default function ExaminerPanel({
    */
   const handleAudioSubmit = useCallback(
     async (rec: RecordedAudio) => {
-      if (panelStateRef.current === 'thinking') return
+      if (isSubmittingRef.current) return
+      isSubmittingRef.current = true
 
       // Explicitly call setError(null) immediately inside handleAudioSubmit before awaiting parent props
       setError(null)
       setInlineWarning(null)
-      stopCurrentPlayback()
       setPanelState('thinking')
 
       playRandomFiller()
@@ -1518,9 +1517,11 @@ export default function ExaminerPanel({
         setPanelState('idle')
         const errMsg = err instanceof Error ? err.message : 'Submission failed. Please try again.'
         setError(errMsg)
+      } finally {
+        isSubmittingRef.current = false
       }
     },
-    [stopCurrentPlayback, playRandomFiller, handleTurnResponse]
+    [playRandomFiller, handleTurnResponse]
   )
   const handleAudioRecorded = handleAudioSubmit
 
@@ -1531,6 +1532,7 @@ export default function ExaminerPanel({
     const text = typedInput.trim()
     if (
       !text ||
+      isSubmittingRef.current ||
       panelStateRef.current === 'thinking' ||
       disabledRef.current ||
       busyRef.current ||
@@ -1539,6 +1541,7 @@ export default function ExaminerPanel({
       return
     }
 
+    isSubmittingRef.current = true
     // Explicitly call setError(null) immediately inside handleTextSubmit before awaiting parent props
     setError(null)
     setInlineWarning(null)
@@ -1578,6 +1581,8 @@ export default function ExaminerPanel({
       setPanelState('idle')
       const errMsg = err instanceof Error ? err.message : 'Submission failed. Please try again.'
       setError(errMsg)
+    } finally {
+      isSubmittingRef.current = false
     }
   }, [
     typedInput,
@@ -1591,7 +1596,7 @@ export default function ExaminerPanel({
    */
   const handleRetry = useCallback(() => {
     const lastSub = lastSubmissionRef.current
-    if (!lastSub || panelStateRef.current === 'thinking') return
+    if (!lastSub || isSubmittingRef.current || panelStateRef.current === 'thinking') return
 
     // Explicitly call setError(null) immediately inside handleRetry before awaiting parent props
     setError(null)
@@ -1601,6 +1606,7 @@ export default function ExaminerPanel({
       void handleAudioSubmit(lastSub.audio)
     } else {
       void (async () => {
+        isSubmittingRef.current = true
         // Explicitly call setError(null) immediately inside handleRetry before awaiting parent props
         setError(null)
         setInlineWarning(null)
@@ -1629,6 +1635,8 @@ export default function ExaminerPanel({
           setPanelState('idle')
           const errMsg = err instanceof Error ? err.message : 'Submission failed'
           setError(errMsg)
+        } finally {
+          isSubmittingRef.current = false
         }
       })()
     }
@@ -1647,83 +1655,35 @@ export default function ExaminerPanel({
     },
     onTooShort: () => {
       setInlineWarning("Didn't catch that — try again or type")
-      if (panelStateRef.current === 'listening') {
+      if (activeFillerRef.current) {
+        activeFillerRef.current.stop()
+        activeFillerRef.current = null
+      }
+      if (panelStateRef.current === 'listening' || panelStateRef.current === 'thinking') {
         setPanelState('idle')
       }
     },
   })
   recorderRef.current = recorder
 
-  // Barge-in: Space or recording while speaking immediately stops playback and starts recording
+  // Push-to-talk recording state tracking & barge-in
   useEffect(() => {
     if (recorder.isRecording) {
       stopCurrentPlayback()
+      isCancelledRef.current = false
       setPanelState('listening')
     } else if (panelState === 'listening' && !recorder.isRecording) {
-      // Esc cancelled recording or stopped without submission
-      setPanelState('idle')
-    }
-  }, [recorder.isRecording, panelState, stopCurrentPlayback])
-
-  // Global Spacebar guard preventing page scrolling across all states while panel is active,
-  // plus direct barge-in trigger when speaking
-  useEffect(() => {
-    const isSpaceKey = (e: KeyboardEvent) => e.code === 'Space' || e.key === ' '
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isSpaceKey(e)) return
-
-      // Ensure every Spacebar keydown handler calls e.preventDefault() if document.activeElement is not an input/textarea
-      const active = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
-      const isInput =
-        (typeof isTextInputElement === 'function' ? isTextInputElement(active) : shouldIgnoreKeyboardTarget(e)) ||
-        (typeof isTextInputElement === 'function' ? isTextInputElement(e.target as HTMLElement | null) : false)
-
-      if (!isInput) {
-        e.preventDefault()
+      // disabled mid-hold: the hook cancels the clip, so no submit will follow — don't enter thinking
+      if (isCancelledRef.current || disabledRef.current) {
+        isCancelledRef.current = false
+        setPanelState('idle')
       } else {
-        return
-      }
-
-      // If a non-text control (like a checkbox or button) had focus, blur it so Spacebar never toggles or activates it
-      if (active && active !== document.body) {
-        active.blur?.()
-      }
-
-      // Direct barge-in: pressing Space while speaking immediately halts playback & starts recording
-      if (
-        panelStateRef.current === 'speaking' &&
-        !e.repeat &&
-        !disabledRef.current &&
-        !busyRef.current
-      ) {
-        stopCurrentPlayback()
-        recorderRef.current?.startRecording()
+        // PTT released: smooth transition cleanly into thinking while encoding audio (no idle flicker)
+        setPanelState('thinking')
+        playRandomFiller()
       }
     }
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (!isSpaceKey(e)) return
-
-      // Ensure every Spacebar keyup handler calls e.preventDefault() if document.activeElement is not an input/textarea
-      const active = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
-      const isInput =
-        (typeof isTextInputElement === 'function' ? isTextInputElement(active) : shouldIgnoreKeyboardTarget(e)) ||
-        (typeof isTextInputElement === 'function' ? isTextInputElement(e.target as HTMLElement | null) : false)
-
-      if (!isInput) {
-        e.preventDefault()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown, { capture: true, passive: false })
-    window.addEventListener('keyup', handleKeyUp, { capture: true, passive: false })
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, { capture: true })
-      window.removeEventListener('keyup', handleKeyUp, { capture: true })
-    }
-  }, [stopCurrentPlayback])
+  }, [recorder.isRecording, panelState, stopCurrentPlayback, playRandomFiller])
 
   // Escape key handler to cancel in-flight submission or recording
   useEffect(() => {
@@ -1736,6 +1696,10 @@ export default function ExaminerPanel({
             activeFillerRef.current.stop()
             activeFillerRef.current = null
           }
+          setPanelState('idle')
+        } else if (panelState === 'listening') {
+          isCancelledRef.current = true
+          recorderRef.current?.cancelRecording()
           setPanelState('idle')
         }
       }

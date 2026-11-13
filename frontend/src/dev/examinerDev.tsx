@@ -443,6 +443,16 @@ function ExaminerDevHarness() {
   const simulatedDelayMsRef = useRef(simulatedDelayMs)
   simulatedDelayMsRef.current = simulatedDelayMs
 
+  // Mode: Live Backend (port 8000) vs Offline Mock (defaults to Live Backend)
+  const [backendMode, setBackendMode] = useState<'live' | 'mock'>('live')
+  const backendModeRef = useRef<'live' | 'mock'>('live')
+  backendModeRef.current = backendMode
+
+  const [backendError, setBackendError] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState<string>(() => `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`)
+  const sessionIdRef = useRef(sessionId)
+  sessionIdRef.current = sessionId
+
   // Single unified failure simulation state & ref (single source of truth)
   const [simulateFailure, setSimulateFailure] = useState(false)
   const simulateFailureRef = useRef(false)
@@ -455,7 +465,7 @@ function ExaminerDevHarness() {
   }, [])
   const [debugDrawerOpen, setDebugDrawerOpen] = useState(false)
   const [actionLog, setActionLog] = useState<string[]>([
-    'Dev harness mounted. Initial Turn 1 loaded.',
+    'Dev harness mounted. Mode: Live Backend (port 8000).',
     'Task B6 autonomous turn-flow wired to ExaminerPanel.',
   ])
   const [, startTransition] = useTransition()
@@ -676,66 +686,230 @@ function ExaminerDevHarness() {
     }, 200)
   }
 
-  // ExaminerPanel callbacks with B6 simulated 900ms delay & optional failure
+  // Live Backend (port 8000) Start Turn Fetcher
+  const fetchLiveStartTurn = useCallback(async (sid?: string) => {
+    const targetSid = sid || `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+    setSessionId(targetSid)
+    sessionIdRef.current = targetSid
+    setBackendError(null)
+    logAction(`📡 Fetching start turn from http://localhost:8000/api/dev/start?session_id=${targetSid}...`)
+    try {
+      const res = await fetch(`http://localhost:8000/api/dev/start?session_id=${encodeURIComponent(targetSid)}`)
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+      }
+      const data: TurnResponse = await res.json()
+      setCurrentTurn(data)
+      setHistory([data])
+      setTurnIndex(0)
+      turnIndexRef.current = 0
+      setBackendError(null)
+      logAction(`✅ Connected to Live Backend (port 8000). Loaded Q1: ${data.topic}`)
+      return data
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const friendlyMsg = `Cannot connect to Live Backend at http://localhost:8000 (${msg}). Make sure dev_server is running on port 8000 or switch to Offline Mock.`
+      setBackendError(friendlyMsg)
+      logAction(`⚠️ ${friendlyMsg}`)
+      setCurrentTurn(MOCK_TURNS[0])
+      setHistory([MOCK_TURNS[0]])
+      setTurnIndex(0)
+      turnIndexRef.current = 0
+      return null
+    }
+  }, [])
+
+  // Auto-fetch start turn in live mode on mount
+  useEffect(() => {
+    if (backendModeRef.current === 'live') {
+      void fetchLiveStartTurn(sessionIdRef.current)
+    }
+  }, [fetchLiveStartTurn])
+
+  const handleSwitchMode = useCallback((mode: 'live' | 'mock') => {
+    setBackendMode(mode)
+    backendModeRef.current = mode
+    if (mode === 'live') {
+      logAction('Mode switched to: Live Backend (port 8000)')
+      void fetchLiveStartTurn()
+    } else {
+      setBackendError(null)
+      setCurrentTurn(MOCK_TURNS[0])
+      setHistory([MOCK_TURNS[0]])
+      setTurnIndex(0)
+      turnIndexRef.current = 0
+      logAction('Mode switched to: Offline Mock')
+    }
+  }, [fetchLiveStartTurn])
+
+  const handleRestartSession = useCallback(() => {
+    if (backendModeRef.current === 'live') {
+      const newSid = `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+      logAction(`🔄 Restarting Live Backend session (${newSid})...`)
+      void fetchLiveStartTurn(newSid)
+    } else {
+      logAction('🔄 Restarting Offline Mock session (Turn 1)...')
+      setTurnIndex(0)
+      turnIndexRef.current = 0
+      setCurrentTurn(MOCK_TURNS[0])
+      setHistory([MOCK_TURNS[0]])
+    }
+  }, [fetchLiveStartTurn])
+
+  // ExaminerPanel callbacks supporting Live Backend (port 8000) and Offline Mock fallback
   // Wrapped in useCallback with stable references; reads simulateFailureRef & turnIndexRef via refs
   const handleMockAudioSubmit = useCallback(async (
     rec: RecordedAudio
   ): Promise<TurnResponse> => {
+    const startTime = performance.now()
     logAction(`onSubmitAudio: ${rec.durationMs}ms, ${rec.mimeType}, size=${rec.base64.length}b64`)
-    const delay = simulatedDelayMsRef.current
-    if (delay > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delay))
-    }
+
     if (simulateFailureRef.current) {
       logAction('❌ Simulated submission failure triggered (500 Error)')
       throw new Error('Simulated network error: POST /api/viva/turn failed (500)')
     }
-    const currentIdx = turnIndexRef.current
-    const nextIdx = Math.min(currentIdx + 1, MOCK_TURNS.length - 1)
-    const next = MOCK_TURNS[nextIdx]
-    turnIndexRef.current = nextIdx
-    startTransition(() => {
-      setTurnIndex(nextIdx)
-      setCurrentTurn(next)
-      setHistory(MOCK_TURNS.slice(0, nextIdx + 1))
-    })
-    return next
+
+    if (backendModeRef.current === 'live') {
+      const sid = sessionIdRef.current
+      logAction(`📡 POST http://localhost:8000/api/viva/turn (audio, session ${sid})...`)
+      let res: Response
+      try {
+        res = await fetch('http://localhost:8000/api/viva/turn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sid,
+            audio_base64: rec.base64,
+            audio_mime: rec.mimeType,
+          }),
+        })
+      } catch (netErr: unknown) {
+        const netMsg = netErr instanceof Error ? netErr.message : String(netErr)
+        throw new Error(`Network error connecting to port 8000: ${netMsg}`)
+      }
+
+      if (!res.ok) {
+        const errDetail = await res.json().catch(() => ({ detail: res.statusText }))
+        const detailStr =
+          typeof errDetail.detail === 'string'
+            ? errDetail.detail
+            : JSON.stringify(errDetail.detail || res.statusText)
+        logAction(`❌ Backend returned HTTP ${res.status}: ${detailStr}`)
+        throw new Error(`HTTP ${res.status}: ${detailStr}`)
+      }
+
+      const turnData: TurnResponse = await res.json()
+      const latencyMs = Math.round(performance.now() - startTime)
+      logAction(`✅ Audio turn response received in ${latencyMs}ms! Verdict: ${turnData.verdict}, Depth: L${turnData.depth_level}`)
+      console.log(`[Release -> Response Latency: ${latencyMs}ms] Verdict: ${turnData.verdict}`)
+
+      startTransition(() => {
+        setCurrentTurn(turnData)
+        setHistory((prev) => [...prev, turnData])
+        const nextIdx = turnIndexRef.current + 1
+        turnIndexRef.current = nextIdx
+        setTurnIndex(nextIdx)
+      })
+      return turnData
+    } else {
+      const delay = simulatedDelayMsRef.current
+      if (delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
+      const currentIdx = turnIndexRef.current
+      const nextIdx = Math.min(currentIdx + 1, MOCK_TURNS.length - 1)
+      const next = MOCK_TURNS[nextIdx]
+      turnIndexRef.current = nextIdx
+      startTransition(() => {
+        setTurnIndex(nextIdx)
+        setCurrentTurn(next)
+        setHistory(MOCK_TURNS.slice(0, nextIdx + 1))
+      })
+      return next
+    }
   }, [])
 
   const handleMockTextSubmit = useCallback(async (
     text: string
   ): Promise<TurnResponse> => {
+    const startTime = performance.now()
     logAction(`onSubmitText: "${text}"`)
-    const delay = simulatedDelayMsRef.current
-    if (delay > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delay))
-    }
+
     if (simulateFailureRef.current) {
       logAction('❌ Simulated submission failure triggered (500 Error)')
       throw new Error('Simulated network error: POST /api/viva/turn failed (500)')
     }
-    const currentIdx = turnIndexRef.current
-    const nextIdx = Math.min(currentIdx + 1, MOCK_TURNS.length - 1)
-    const next = MOCK_TURNS[nextIdx]
-    turnIndexRef.current = nextIdx
-    startTransition(() => {
-      setTurnIndex(nextIdx)
-      setCurrentTurn(next)
-      setHistory(MOCK_TURNS.slice(0, nextIdx + 1))
-    })
-    return next
+
+    if (backendModeRef.current === 'live') {
+      const sid = sessionIdRef.current
+      logAction(`📡 POST http://localhost:8000/api/viva/turn (text, session ${sid})...`)
+      let res: Response
+      try {
+        res = await fetch('http://localhost:8000/api/viva/turn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sid,
+            student_text: text,
+          }),
+        })
+      } catch (netErr: unknown) {
+        const netMsg = netErr instanceof Error ? netErr.message : String(netErr)
+        throw new Error(`Network error connecting to port 8000: ${netMsg}`)
+      }
+
+      if (!res.ok) {
+        const errDetail = await res.json().catch(() => ({ detail: res.statusText }))
+        const detailStr =
+          typeof errDetail.detail === 'string'
+            ? errDetail.detail
+            : JSON.stringify(errDetail.detail || res.statusText)
+        logAction(`❌ Backend returned HTTP ${res.status}: ${detailStr}`)
+        throw new Error(`HTTP ${res.status}: ${detailStr}`)
+      }
+
+      const turnData: TurnResponse = await res.json()
+      const latencyMs = Math.round(performance.now() - startTime)
+      logAction(`✅ Text turn response received in ${latencyMs}ms! Verdict: ${turnData.verdict}, Depth: L${turnData.depth_level}`)
+
+      startTransition(() => {
+        setCurrentTurn(turnData)
+        setHistory((prev) => [...prev, turnData])
+        const nextIdx = turnIndexRef.current + 1
+        turnIndexRef.current = nextIdx
+        setTurnIndex(nextIdx)
+      })
+      return turnData
+    } else {
+      const delay = simulatedDelayMsRef.current
+      if (delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
+      const currentIdx = turnIndexRef.current
+      const nextIdx = Math.min(currentIdx + 1, MOCK_TURNS.length - 1)
+      const next = MOCK_TURNS[nextIdx]
+      turnIndexRef.current = nextIdx
+      startTransition(() => {
+        setTurnIndex(nextIdx)
+        setCurrentTurn(next)
+        setHistory(MOCK_TURNS.slice(0, nextIdx + 1))
+      })
+      return next
+    }
   }, [])
 
   const handleTurnUpdate = (turn: TurnResponse) => {
     logAction(`onTurn callback: L${turn.depth_level} - ${turn.topic}`)
     setCurrentTurn(turn)
-    const idx = MOCK_TURNS.findIndex(
-      (t) => t.topic === turn.topic && t.depth_level === turn.depth_level
-    )
-    if (idx !== -1) {
-      turnIndexRef.current = idx
-      setTurnIndex(idx)
-      setHistory(MOCK_TURNS.slice(0, idx + 1))
+    if (backendModeRef.current === 'mock') {
+      const idx = MOCK_TURNS.findIndex(
+        (t) => t.topic === turn.topic && t.depth_level === turn.depth_level
+      )
+      if (idx !== -1) {
+        turnIndexRef.current = idx
+        setTurnIndex(idx)
+        setHistory(MOCK_TURNS.slice(0, idx + 1))
+      }
     }
   }
 
@@ -754,18 +928,52 @@ function ExaminerDevHarness() {
       className="flex flex-col min-h-screen w-full bg-void-canvas text-pale-frost font-sans overflow-x-hidden"
       onPointerDown={() => unlockAudio()}
     >
-      {/* Dev Harness Navigation Bar (Sticky with Quick B5 Controls) */}
+      {/* Dev Harness Navigation Bar (Sticky with Quick Controls) */}
       <header className="sticky top-0 z-30 flex shrink-0 items-center justify-between border-b border-steel-outline bg-midnight-panel/95 backdrop-blur px-4 py-2 text-xs flex-wrap gap-2">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <span className="font-bold text-signal-white text-sm tracking-wide">
             VivaVoce
           </span>
           <span className="rounded bg-deep-slate px-2 py-0.5 font-mono text-[11px] text-nuxt-signal border border-steel-outline">
-            examiner-dev.html (M3 Lane B)
+            examiner-dev.html (M3)
           </span>
-          <span className="hidden sm:inline text-muted-fog text-[11px]">
-            Task B6 Turn-Flow Active
-          </span>
+
+          {/* Mode Switcher: Live Backend (port 8000) vs Offline Mock */}
+          <div className="flex items-center gap-0.5 bg-void-canvas p-0.5 rounded border border-steel-outline text-xs">
+            <button
+              type="button"
+              onClick={() => handleSwitchMode('live')}
+              className={`rounded px-2.5 py-1 text-[11px] font-medium transition ${
+                backendMode === 'live'
+                  ? 'bg-emerald-600 text-white font-bold shadow-sm'
+                  : 'text-muted-fog hover:text-pale-frost hover:bg-deep-slate'
+              }`}
+            >
+              Live Backend (port 8000)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSwitchMode('mock')}
+              className={`rounded px-2.5 py-1 text-[11px] font-medium transition ${
+                backendMode === 'mock'
+                  ? 'bg-nuxt-signal text-void-canvas font-bold shadow-sm'
+                  : 'text-muted-fog hover:text-pale-frost hover:bg-deep-slate'
+              }`}
+            >
+              Offline Mock
+            </button>
+          </div>
+
+          {/* New Session / Restart Button */}
+          <button
+            type="button"
+            onClick={handleRestartSession}
+            className="rounded bg-deep-slate hover:bg-steel-outline text-signal-white border border-steel-outline px-2.5 py-1 text-[11px] font-medium transition flex items-center gap-1.5 active:scale-95"
+            title="Reset and start a new viva session"
+          >
+            <span>🔄</span>
+            <span>New Session / Restart</span>
+          </button>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
@@ -866,6 +1074,32 @@ function ExaminerDevHarness() {
         </div>
       </header>
 
+      {/* Port 8000 Unreachable Inline Dev Warning Banner */}
+      {backendMode === 'live' && backendError && (
+        <div className="w-full bg-amber-950/90 border-b border-amber-600 px-4 py-2 text-xs text-amber-200 flex items-center justify-between gap-3 flex-wrap animate-fadeIn">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-amber-400 font-bold text-sm select-none">⚠️</span>
+            <span className="truncate">{backendError}</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleSwitchMode('mock')}
+              className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-void-canvas font-semibold text-[11px] transition shadow"
+            >
+              Switch to Offline Mock
+            </button>
+            <button
+              type="button"
+              onClick={() => void fetchLiveStartTurn()}
+              className="px-2.5 py-1 rounded bg-deep-slate hover:bg-steel-outline text-pale-frost border border-amber-600/60 text-[11px] transition"
+            >
+              Retry Connection
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Split View: 65% Workspace Placeholder | 35% ExaminerPanel */}
       <main className="flex flex-col lg:flex-row w-full h-[620px] shrink-0 border-b border-steel-outline bg-void-canvas">
         {/* Left 65%: Workspace Placeholder (M4 IDE Simulation) */}
@@ -938,6 +1172,7 @@ function ExaminerDevHarness() {
           aria-label="Examiner Panel"
         >
           <ExaminerPanel
+            key={`${backendMode}-${sessionId}`}
             initialTurn={currentTurn}
             history={history}
             forceState={forcedState}
@@ -946,7 +1181,7 @@ function ExaminerDevHarness() {
             onSubmitText={handleMockTextSubmit}
             onTurn={handleTurnUpdate}
             onRequestReport={handleRequestReport}
-            fillersUrl="/api/voice/fillers"
+            fillersUrl={backendMode === 'live' ? 'http://localhost:8000/api/voice/fillers' : '/api/voice/fillers'}
             disabled={false}
           />
         </aside>
@@ -964,7 +1199,7 @@ function ExaminerDevHarness() {
               🛠️ M3 Voice Pipeline — Dev Test Controls
             </span>
             <span className="px-2 py-0.5 rounded text-[10px] font-mono text-nuxt-signal bg-deep-slate border border-steel-outline">
-              Task B6 Active
+              Mode: {backendMode === 'live' ? 'Live Backend (port 8000)' : 'Offline Mock'} • Session: {sessionId}
             </span>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
