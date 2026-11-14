@@ -55,6 +55,7 @@ from backend.models.schemas import (
     RepoIndex,
     RunCodeRequest,
     RunCodeResponse,
+    TerminateSessionRequest,
     TurnRequest,
     TurnResponse,
     VivaReport,
@@ -636,7 +637,7 @@ async def ingest_repo(req: IngestRepoRequest) -> IngestResponse:
     initial_turn = start_session(
         mode="repo",
         repo_index=repo_index,
-        selected_author=req.selected_author,
+        selected_author=None,
         audio_synthesizer=_invoke_m3_tts,
     )
 
@@ -879,7 +880,7 @@ async def viva_turn(
             session_id=eff_session_id,
             student_text=eff_student_text,
             code_result=parsed_code_result,
-            selected_author=eff_selected_author,
+            selected_author=None,
             audio_synthesizer=_invoke_m3_tts,
         )
         if audio_bytes and not eff_student_text:
@@ -928,6 +929,7 @@ async def run_code(req: RunCodeRequest) -> RunCodeResponse:
             test_cases=req.test_cases,
             run_hidden=req.run_hidden,
             custom_input=req.custom_input,
+            driver_code=req.driver_code,
         )
     else:
         effective_test_code = req.test_code
@@ -993,3 +995,16 @@ async def get_filler_audio_clip() -> Dict[str, str]:
     except Exception:
         pass
     return {"audio_base64": _generate_silent_wav_base64(250)}
+
+
+@app.post("/api/viva/terminate")
+async def terminate_viva_session(req: TerminateSessionRequest) -> Dict[str, str]:
+    """
+    Terminates an active Viva / OA session due to anti-plagiarism fullscreen exit or timeout.
+    Prevents further answers or submissions from being accepted.
+    """
+    session = session_manager.get_session(req.session_id)
+    if session:
+        session.done = True
+        logger.warning(f"Session {req.session_id} terminated: {req.reason}")
+    return {"status": "terminated", "session_id": req.session_id}

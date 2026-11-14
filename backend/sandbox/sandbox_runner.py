@@ -50,9 +50,12 @@ def execute_multi_language_sandbox(
     test_cases: List[OATestCase],
     run_hidden: bool = False,
     custom_input: Optional[str] = None,
+    driver_code: Optional[str] = None,
 ) -> RunCodeResponse:
     """
     Compiles (if needed) and executes source code against given test cases or custom input.
+    Automatically prepends standard language headers and appends problem driver_code
+    so candidate only needs to write inside authentic LeetCode class Solution.
     Returns real verdict: Accepted, Wrong Answer, Compilation Error, Runtime Error, Time Limit Exceeded.
     """
     lang_clean = (language or "python").lower().strip()
@@ -67,7 +70,12 @@ def execute_multi_language_sandbox(
 
         if lang_clean in ("cpp", "c++", "c"):
             src_file = root / "main.cpp"
-            src_file.write_text(source_code, encoding="utf-8")
+            effective_code = source_code
+            if "int main(" not in source_code:
+                headers = "#include <bits/stdc++.h>\nusing namespace std;\n\n"
+                tail = f"\n\n{driver_code}" if driver_code else ""
+                effective_code = f"{headers}{source_code}{tail}"
+            src_file.write_text(effective_code, encoding="utf-8")
             exe_path = root / ("main.exe" if sys.platform == "win32" else "main")
 
             # Look up g++ binary
@@ -96,7 +104,12 @@ def execute_multi_language_sandbox(
 
         elif lang_clean in ("java", "openjdk"):
             src_file = root / "Main.java"
-            src_file.write_text(source_code, encoding="utf-8")
+            effective_code = source_code
+            if "public static void main" not in source_code:
+                headers = "import java.io.*;\nimport java.util.*;\n\n"
+                tail = f"\n\n{driver_code}" if driver_code else ""
+                effective_code = f"{headers}{source_code}{tail}"
+            src_file.write_text(effective_code, encoding="utf-8")
 
             javac_cmd = shutil.which("javac") or "javac"
             try:
@@ -137,14 +150,24 @@ def execute_multi_language_sandbox(
 
         elif lang_clean in ("javascript", "js", "node"):
             src_file = root / "main.js"
-            src_file.write_text(source_code, encoding="utf-8")
+            effective_code = source_code
+            if "readFileSync" not in source_code:
+                headers = "const fs = require('fs');\n\n"
+                tail = f"\n\n{driver_code}" if driver_code else ""
+                effective_code = f"{headers}{source_code}{tail}"
+            src_file.write_text(effective_code, encoding="utf-8")
             node_cmd = shutil.which("node") or "node"
             executable_cmd = [node_cmd, str(src_file)]
 
         else:
             # Default: Python
             src_file = root / "main.py"
-            src_file.write_text(source_code, encoding="utf-8")
+            effective_code = source_code
+            if "__main__" not in source_code and "def solve(" not in source_code:
+                headers = "import sys\nfrom typing import *\nimport collections, heapq, math, bisect\n\n"
+                tail = f"\n\n{driver_code}" if driver_code else ""
+                effective_code = f"{headers}{source_code}{tail}"
+            src_file.write_text(effective_code, encoding="utf-8")
             executable_cmd = [sys.executable, str(src_file)]
 
         # Determine which test cases to run

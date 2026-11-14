@@ -36,6 +36,7 @@ import type {
   OAQuestion,
   VivaReport,
 } from '../types/api'
+import { useProctor, ProctorStatusPill } from '../context/ProctorContext'
 
 // Initial dynamic starter questions
 const INITIAL_OA_QUESTIONS: OAQuestion[] = [
@@ -146,8 +147,8 @@ interface Props {
 }
 
 export default function DsaPage({ onBack }: Props) {
-  // LeetCode Profile Ingestion State (defaults to 'sakshamver')
-  const [lcInput, setLcInput] = useState('sakshamver')
+  // LeetCode Profile Ingestion State (blank by default)
+  const [lcInput, setLcInput] = useState('')
   const [ingesting, setIngesting] = useState(false)
   const [ingestError, setIngestError] = useState<string | null>(null)
   const [profileData, setProfileData] = useState<LeetCodeProfileData | null>(null)
@@ -163,6 +164,7 @@ export default function DsaPage({ onBack }: Props) {
   const [report, setReport] = useState<VivaReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
+  const { startProctoredSession, endProctoredSession } = useProctor()
 
   // Ingest LeetCode Profile via live FastAPI /api/ingest-leetcode
   const handleIngestLeetCode = async (usernameOrUrl: string) => {
@@ -184,11 +186,13 @@ export default function DsaPage({ onBack }: Props) {
   }
 
   // Open a specific question in the LeetCode Compiler Screen
-  const launchQuestion = (idx: number) => {
+  const launchQuestion = async (idx: number) => {
     setActiveQuestionIdx(idx)
+    const sid = activeSessionId || `oa_${Date.now()}`
     if (!activeSessionId) {
-      setActiveSessionId(`oa_${Date.now()}`)
+      setActiveSessionId(sid)
     }
+    await startProctoredSession(sid)
   }
 
   const markQuestionSolved = (qid: string) => {
@@ -197,6 +201,7 @@ export default function DsaPage({ onBack }: Props) {
 
   async function finishAssessment() {
     if (!activeSessionId) return
+    await endProctoredSession()
     setShowReport(true)
     setReportLoading(true)
     setReportError(null)
@@ -238,9 +243,11 @@ export default function DsaPage({ onBack }: Props) {
   function handleBack() {
     if (activeSessionId) {
       // Exit compiler workspace back to OA questions overview
+      endProctoredSession().catch(() => {})
       setActiveSessionId(null)
       return
     }
+    endProctoredSession().catch(() => {})
     onBack()
   }
 
@@ -308,6 +315,8 @@ export default function DsaPage({ onBack }: Props) {
           >
             DSA / OA Prep
           </span>
+
+          <ProctorStatusPill />
 
           {/* In Compiler Workspace: Question Switcher Dropdown */}
           {activeSessionId && generatedOaQuestions.length > 0 && (
@@ -463,7 +472,7 @@ export default function DsaPage({ onBack }: Props) {
                     value={lcInput}
                     onChange={e => setLcInput(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && !ingesting && handleIngestLeetCode(lcInput)}
-                    placeholder="Enter LeetCode username or URL (e.g. sakshamver)"
+                    placeholder="https://leetcode.com/u/user_id"
                     style={{
                       flex: 1,
                       background: 'transparent',
@@ -490,31 +499,6 @@ export default function DsaPage({ onBack }: Props) {
                       <Sparkles className="h-4 w-4" /> Ingest &amp; Generate OA
                     </>
                   )}
-                </button>
-              </div>
-
-              {/* Quick-fill sample buttons */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--color-slate-veil)', flexWrap: 'wrap' }}>
-                <span>Quick test profiles:</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLcInput('sakshamver')
-                    handleIngestLeetCode('sakshamver')
-                  }}
-                  className="rounded-full border border-mist-border bg-chalk-canvas px-3 py-1 font-semibold text-deep-indigo hover:border-iris-bolt"
-                >
-                  @sakshamver (DP x71 · Backtracking x15 · 320 Solved)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLcInput('xyz')
-                    handleIngestLeetCode('xyz')
-                  }}
-                  className="rounded-full border border-mist-border bg-chalk-canvas px-3 py-1 font-semibold text-deep-indigo hover:border-iris-bolt"
-                >
-                  @xyz (Demo Profile · 297 Solved)
                 </button>
               </div>
 

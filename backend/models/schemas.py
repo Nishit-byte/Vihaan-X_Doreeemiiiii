@@ -227,6 +227,7 @@ class RunCodeRequest(BaseModel):
     test_cases: List[OATestCase] = Field(default_factory=list)
     run_hidden: bool = False
     custom_input: Optional[str] = None
+    driver_code: Optional[str] = None
 
 
 class RunCodeResponse(BaseModel):
@@ -443,6 +444,8 @@ class OAQuestion(BaseModel):
     starter_code: Optional[str] = None
     test_code: Optional[str] = None
     test_cases: List[OATestCase] = Field(default_factory=list)
+    starter_templates: Dict[str, str] = Field(default_factory=dict)
+    driver_code: Dict[str, str] = Field(default_factory=dict)
 
 
 class LeetCodeProfileData(BaseModel):
@@ -469,4 +472,9 @@ class IngestLeetCodeResponse(BaseModel):
     profile: LeetCodeProfileData
     oa_questions: List[OAQuestion]
     initial_turn: TurnResponse
+
+
+class TerminateSessionRequest(BaseModel):
+    session_id: str
+    reason: str = "anti_plagiarism_fullscreen_exit"
 

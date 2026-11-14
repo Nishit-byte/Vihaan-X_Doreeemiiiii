@@ -215,6 +215,7 @@ export interface RunCodeRequest {
   test_cases?: OATestCase[]
   run_hidden?: boolean
   custom_input?: string
+  driver_code?: string
 }
 
 export interface RunCodeResponse {
@@ -285,6 +286,8 @@ export interface OAQuestion {
   starter_code?: string
   test_code?: string
   test_cases?: OATestCase[]
+  starter_templates?: Record<string, string>
+  driver_code?: Record<string, string>
 }
 
 export interface LeetCodeProfileData {
