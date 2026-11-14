@@ -52,6 +52,7 @@ from backend.models.schemas import (
     TurnRequest,
     TurnResponse,
     VivaReport,
+    VivaTurnRequest,
 )
 from backend.voice import voice_router, warm_filler_cache
 
@@ -787,11 +788,14 @@ async def viva_turn(
         audio_mime = getattr(turn_req, "audio_mime", None) or body.get("audio_mime")
         if turn_req.audio_base64:
             raw_b64 = turn_req.audio_base64
-            if "," in raw_b64 and "base64" in raw_b64:
+            if not audio_mime and raw_b64.startswith("data:"):
+                header = raw_b64.split(",", 1)[0]
+                mime_part = header.replace("data:", "").replace(";base64", "").strip()
+                if mime_part:
+                    audio_mime = mime_part
+            if "," in raw_b64:
                 raw_b64 = raw_b64.split(",", 1)[1]
-            elif "," in raw_b64:
-                raw_b64 = raw_b64.split(",")[-1]
-            raw_b64 = raw_b64.strip()
+            raw_b64 = "".join(raw_b64.split())
             missing_padding = len(raw_b64) % 4
             if missing_padding:
                 raw_b64 += "=" * (4 - missing_padding)
@@ -837,9 +841,20 @@ async def viva_turn(
             selected_author=eff_selected_author,
             audio_synthesizer=_invoke_m3_tts,
         )
+        if audio_bytes and not eff_student_text:
+            response.verdict = "no_answer"
+            response.student_transcript = "(no speech detected)"
+            response.ack_text = (
+                "I couldn't hear any speech in that recording. "
+                "Please hold Space to speak clearly, then release to submit (or type below)."
+            )
+            if not response.audio_base64 or response.audio_base64 == _generate_silent_wav_base64(250):
+                spoken_text = _build_spoken_text(response.ack_text, response.question_text)
+                response.audio_base64 = _invoke_m3_tts(spoken_text)
+
         print(
             f"[VIVA TURN] audio_bytes={len(audio_bytes) if audio_bytes else 0} "
-            f"transcript={eff_student_text!r} grade={response.verdict}",
+            f"transcript={response.student_transcript!r} grade={response.verdict}",
             flush=True,
         )
         return response

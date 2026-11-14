@@ -246,6 +246,9 @@ class TurnRequest(BaseModel):
     )
 
 
+VivaTurnRequest = TurnRequest
+
+
 class TurnResponse(BaseModel):
     session_id: str
     student_transcript: str
