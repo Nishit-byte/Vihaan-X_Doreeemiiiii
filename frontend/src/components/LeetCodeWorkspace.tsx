@@ -129,7 +129,12 @@ export default function LeetCodeWorkspace({
   onSolved,
   initialLanguage = 'cpp',
 }: Props) {
-  const { startProctoredSession, isFullscreen } = useProctor()
+  const { startProctoredSession, isFullscreen, terminatedDueToViolation } = useProctor()
+
+  // Ensure proctored fullscreen session is actively running
+  useEffect(() => {
+    startProctoredSession(sessionId)
+  }, [sessionId, startProctoredSession])
 
   // Language & Code State
   const [selectedLang, setSelectedLang] = useState<LanguageBoilerplate>(
@@ -181,6 +186,13 @@ export default function LeetCodeWorkspace({
     setCustomInput(sampleCases[0]?.stdin || '')
   }, [question.question_id])
 
+  // Freeze assessment timer on anti-plagiarism termination
+  useEffect(() => {
+    if (terminatedDueToViolation) {
+      setIsTimerRunning(false)
+    }
+  }, [terminatedDueToViolation])
+
   // Timer interval hook
   useEffect(() => {
     if (!isTimerRunning) return
@@ -226,6 +238,7 @@ export default function LeetCodeWorkspace({
 
   // Execute visible sample test cases (Run)
   const handleRun = async () => {
+    if (terminatedDueToViolation) return
     triggerFullscreen()
     setExecuting(true)
     setConsoleTab('result')
@@ -268,6 +281,7 @@ export default function LeetCodeWorkspace({
 
   // Execute all test cases (Submit / Run & Verify)
   const handleSubmit = async () => {
+    if (terminatedDueToViolation) return
     triggerFullscreen()
     setExecuting(true)
     setConsoleTab('result')
@@ -588,9 +602,14 @@ export default function LeetCodeWorkspace({
             <div className="flex items-center gap-2">
               <button
                 onClick={handleRun}
-                disabled={executing}
+                disabled={executing || terminatedDueToViolation}
                 className="btn-outline flex items-center gap-1.5"
-                style={{ padding: '6px 14px', fontSize: 13 }}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: 13,
+                  opacity: terminatedDueToViolation ? 0.5 : 1,
+                  cursor: terminatedDueToViolation ? 'not-allowed' : 'pointer',
+                }}
               >
                 {executing && consoleTab === 'testcase' ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -602,12 +621,14 @@ export default function LeetCodeWorkspace({
 
               <button
                 onClick={handleSubmit}
-                disabled={executing || isSolved}
+                disabled={executing || isSolved || terminatedDueToViolation}
                 className="btn-primary flex items-center gap-1.5"
                 style={{
                   background: isSolved ? '#16a34a' : 'var(--color-iris-bolt)',
                   padding: '6px 18px',
                   fontSize: 13,
+                  opacity: terminatedDueToViolation ? 0.5 : 1,
+                  cursor: terminatedDueToViolation ? 'not-allowed' : 'pointer',
                 }}
               >
                 {executing ? (
