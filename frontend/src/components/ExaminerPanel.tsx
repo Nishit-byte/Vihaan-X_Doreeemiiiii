@@ -23,6 +23,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { TurnResponse, Verdict } from '../types/api'
 import { submitTurn } from '../services/apiClient'
+import { triggerFullscreen } from '../utils/fullscreen'
 import {
   RecordedAudio,
   RecorderStatus,
@@ -829,7 +830,10 @@ function QuestionCard({
           </p>
           <button
             type="button"
-            onClick={onStartViva}
+            onClick={() => {
+              triggerFullscreen()
+              onStartViva?.()
+            }}
             disabled={busy || disabled}
             className="rounded-md bg-nuxt-signal px-4 py-1.5 text-xs font-semibold text-void-canvas hover:opacity-90 disabled:opacity-40 transition active:scale-95 select-none"
           >

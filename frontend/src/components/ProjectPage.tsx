@@ -9,7 +9,7 @@ import ExaminerPanel from './ExaminerPanel'
 import ReportModal from './ReportModal'
 import { fetchReport, ingestRepo, submitTurn, subscribeDemoMode } from '../services/apiClient'
 import type { IngestResponse, RunCodeResponse, TurnResponse, VivaReport } from '../types/api'
-import { useProctor, ProctorStatusPill } from '../context/ProctorContext'
+import { useProctor, ProctorStatusPill, triggerFullscreen } from '../context/ProctorContext'
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong')
 
@@ -40,19 +40,16 @@ export default function ProjectPage({ onBack }: Props) {
     setTurn(null); setHistory([]); setReport(null)
   }
 
-  const startViva = useCallback(async () => {
+  const startViva = useCallback(() => {
+    // 1. Synchronously trigger fullscreen as line 1
+    triggerFullscreen()
     if (!pendingFirstTurn) return
-    try {
-      if (!document.fullscreenElement && document.documentElement) {
-        await document.documentElement.requestFullscreen()
-      }
-    } catch (err) {
-      console.warn('Fullscreen request blocked by browser:', err)
-    }
     if (session) {
-      await startProctoredSession(session.session_id)
+      startProctoredSession(session.session_id)
     }
-    setTurn(pendingFirstTurn); setHistory([pendingFirstTurn]); setPendingFirstTurn(null)
+    setTurn(pendingFirstTurn)
+    setHistory([pendingFirstTurn])
+    setPendingFirstTurn(null)
   }, [pendingFirstTurn, session, startProctoredSession])
 
   async function guarded(fn: () => Promise<void>) {

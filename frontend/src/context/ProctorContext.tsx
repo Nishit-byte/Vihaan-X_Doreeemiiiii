@@ -3,6 +3,14 @@ import { AlertOctagon, FileText, Home, Lock, ShieldAlert, ShieldCheck } from 'lu
 import { fetchReport, terminateSession } from '../services/apiClient'
 import type { VivaReport } from '../types/api'
 import ReportModal from '../components/ReportModal'
+import {
+  exitFullscreenSafely,
+  isFullscreenSupported as checkFullscreenSupported,
+  isInFullscreen,
+  triggerFullscreen,
+} from '../utils/fullscreen'
+
+export { triggerFullscreen, checkFullscreenSupported as isFullscreenSupported, isInFullscreen, exitFullscreenSafely }
 
 export interface ProctorContextType {
   isProctored: boolean
@@ -10,6 +18,8 @@ export interface ProctorContextType {
   terminatedDueToViolation: boolean
   activeSessionId: string | null
   isFullscreen: boolean
+  isFullscreenSupported: boolean
+  triggerFullscreen: () => boolean
   enterFullscreen: (sessionId?: string) => Promise<boolean>
   startProctoredSession: (sessionId?: string) => Promise<boolean>
   endProctoredSession: () => Promise<void>
@@ -37,9 +47,8 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
   const [isProctoredArmed, setIsProctoredArmed] = useState(false)
   const [terminatedDueToViolation, setTerminatedDueToViolation] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
-  const [isFullscreen, setIsFullscreen] = useState(
-    typeof document !== 'undefined' ? !!document.fullscreenElement : false
-  )
+  const [isFullscreen, setIsFullscreen] = useState(isInFullscreen())
+  const [isFullscreenSupported] = useState(checkFullscreenSupported())
 
   // Report modal state when viewing partial report from lock screen
   const [showReport, setShowReport] = useState(false)
@@ -87,7 +96,7 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      const inFs = typeof document !== 'undefined' && !!document.fullscreenElement
+      const inFs = isInFullscreen()
       setIsFullscreen(inFs)
 
       if (inFs) {
@@ -96,7 +105,8 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
         setIsProctoredArmed(true)
       } else {
         // If candidate was in active proctored mode and exited fullscreen before finishing
-        if (isProctoredArmedRef.current && isSessionActiveRef.current) {
+        // Only trigger violation if fullscreen is actually supported in the environment and session was armed
+        if (isFullscreenSupported && isProctoredArmedRef.current && isSessionActiveRef.current) {
           triggerViolation('fullscreen_exit')
         }
       }
@@ -110,15 +120,22 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
     }
 
     document.addEventListener('fullscreenchange', handleFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange)
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange)
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange)
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange)
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange)
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange)
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [])
+  }, [isFullscreenSupported])
 
   const enterFullscreen = async (sessionId?: string): Promise<boolean> => {
+    triggerFullscreen()
     return startProctoredSession(sessionId || activeSessionIdRef.current || undefined)
   }
 
@@ -134,23 +151,27 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
       setActiveSessionId(sessionId)
     }
 
-    // Request browser fullscreen
-    try {
-      if (document.documentElement && !document.fullscreenElement) {
-        await document.documentElement.requestFullscreen()
-      }
-      const inFs = typeof document !== 'undefined' && !!document.fullscreenElement
-      setIsFullscreen(inFs)
-      if (inFs) {
-        isProctoredArmedRef.current = true
-        setIsProctoredArmed(true)
-      }
-      return inFs
-    } catch (e) {
-      console.warn('Could not enter fullscreen mode:', e)
-      // Blocking gate modal will prompt user to click and enter fullscreen
-      return false
+    // Gracefully handle embedded environments (e.g. IDE webviews, iframes without allow="fullscreen")
+    if (!isFullscreenSupported) {
+      console.warn(
+        '[Proctor] document.fullscreenEnabled is false (embedded webview/iframe). Proceeding in windowed proctored mode without trapping candidate.'
+      )
+      setIsFullscreen(true)
+      isProctoredArmedRef.current = true
+      setIsProctoredArmed(true)
+      return true
     }
+
+    // Trigger synchronously if not already active
+    triggerFullscreen()
+
+    const inFs = isInFullscreen()
+    setIsFullscreen(inFs)
+    if (inFs) {
+      isProctoredArmedRef.current = true
+      setIsProctoredArmed(true)
+    }
+    return inFs
   }
 
   const endProctoredSession = async (): Promise<void> => {
@@ -162,13 +183,7 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
     setIsProctored(false)
     setIsSessionActive(false)
 
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen()
-      }
-    } catch {
-      // Ignore
-    }
+    await exitFullscreenSafely()
   }
 
   const resetViolation = () => {
@@ -228,6 +243,8 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
         terminatedDueToViolation,
         activeSessionId,
         isFullscreen,
+        isFullscreenSupported,
+        triggerFullscreen,
         enterFullscreen,
         startProctoredSession,
         endProctoredSession,
@@ -237,7 +254,7 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
       {children}
 
       {/* ── Blocking Fullscreen Entry Gate Modal ── */}
-      {isSessionActive && !isFullscreen && !terminatedDueToViolation && (
+      {isSessionActive && !isFullscreen && isFullscreenSupported && !terminatedDueToViolation && (
         <div
           role="dialog"
           aria-modal="true"
@@ -295,17 +312,16 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
 
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  if (document.documentElement && !document.fullscreenElement) {
-                    await document.documentElement.requestFullscreen()
+              onClick={() => {
+                triggerFullscreen()
+                setTimeout(() => {
+                  const inFs = isInFullscreen()
+                  setIsFullscreen(inFs)
+                  if (inFs) {
+                    isProctoredArmedRef.current = true
+                    setIsProctoredArmed(true)
                   }
-                  setIsFullscreen(true)
-                  isProctoredArmedRef.current = true
-                  setIsProctoredArmed(true)
-                } catch (e) {
-                  console.warn('Fullscreen entry failed:', e)
-                }
+                }, 100)
               }}
               style={{
                 marginTop: 8,
@@ -478,11 +494,19 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
  * Top bar proctoring status pill
  */
 export function ProctorStatusPill() {
-  const { isProctored, isSessionActive } = useProctor()
+  const { isProctored, isSessionActive, isFullscreen, isFullscreenSupported } = useProctor()
   if (!isProctored || !isSessionActive) return null
+
+  const isEmbedded = !isFullscreenSupported
+  const text = isEmbedded ? 'Proctored · Embedded Preview' : 'Proctored · Fullscreen'
 
   return (
     <div
+      onClick={() => {
+        if (!isFullscreen && isFullscreenSupported) {
+          triggerFullscreen()
+        }
+      }}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -494,11 +518,19 @@ export function ProctorStatusPill() {
         fontSize: 11,
         fontWeight: 700,
         color: '#15803d',
+        cursor: !isFullscreen && isFullscreenSupported ? 'pointer' : 'default',
+        userSelect: 'none',
       }}
-      title="Strict fullscreen proctoring is actively monitoring this session."
+      title={
+        isEmbedded
+          ? 'Running in embedded proctored mode (IDE webview/iframe).'
+          : isFullscreen
+          ? 'Strict fullscreen proctoring is actively monitoring this session.'
+          : 'Click to enter fullscreen proctoring mode.'
+      }
     >
       <ShieldCheck className="h-3.5 w-3.5 text-green-600" />
-      <span>Proctored · Fullscreen</span>
+      <span>{text}</span>
     </div>
   )
 }

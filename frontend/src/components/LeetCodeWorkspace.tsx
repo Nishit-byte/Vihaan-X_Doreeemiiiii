@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import { runCode } from '../services/apiClient'
 import type { OAQuestion, OATestCase, RunCodeRequest, RunCodeResponse, TestCaseResult } from '../types/api'
-import { ProctorStatusPill, useProctor } from '../context/ProctorContext'
+import { ProctorStatusPill, triggerFullscreen, useProctor } from '../context/ProctorContext'
 
 export interface LanguageBoilerplate {
   id: string
@@ -226,6 +226,7 @@ export default function LeetCodeWorkspace({
 
   // Execute visible sample test cases (Run)
   const handleRun = async () => {
+    triggerFullscreen()
     setExecuting(true)
     setConsoleTab('result')
     setResult(null)
@@ -267,6 +268,7 @@ export default function LeetCodeWorkspace({
 
   // Execute all test cases (Submit / Run & Verify)
   const handleSubmit = async () => {
+    triggerFullscreen()
     setExecuting(true)
     setConsoleTab('result')
     setResult(null)
