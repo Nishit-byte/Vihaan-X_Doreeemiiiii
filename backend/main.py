@@ -36,12 +36,18 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.brain.grader import generate_final_report
+from backend.brain.oa_generator import generate_oa_questions
 from backend.brain.state_machine import SESSIONS, process_turn, start_session
+from backend.ingestion.leetcode_parser import fetch_leetcode_profile
 from backend.models.schemas import (
     ASTFunctionSymbol,
     IngestDsaRequest,
+    IngestLeetCodeRequest,
+    IngestLeetCodeResponse,
     IngestRepoRequest,
     IngestResponse,
+    LeetCodeProfileData,
+    OAQuestion,
     OwnedSymbol,
     PaperIndex,
     PaperNode,
@@ -49,9 +55,11 @@ from backend.models.schemas import (
     RepoIndex,
     RunCodeRequest,
     RunCodeResponse,
+    TerminateSessionRequest,
     TurnRequest,
     TurnResponse,
     VivaReport,
+    VivaTurnRequest,
 )
 from backend.voice import voice_router, warm_filler_cache
 
@@ -629,7 +637,7 @@ async def ingest_repo(req: IngestRepoRequest) -> IngestResponse:
     initial_turn = start_session(
         mode="repo",
         repo_index=repo_index,
-        selected_author=req.selected_author,
+        selected_author=None,
         audio_synthesizer=_invoke_m3_tts,
     )
 
@@ -758,6 +766,41 @@ async def ingest_dsa(req: IngestDsaRequest) -> IngestResponse:
     )
 
 
+@app.post("/api/ingest-leetcode", response_model=IngestLeetCodeResponse)
+async def ingest_leetcode(req: IngestLeetCodeRequest) -> IngestLeetCodeResponse:
+    """
+    1. Fetches public LeetCode telemetry via GraphQL and classifies profile into Category 1 or 2.
+    2. Synthesizes 5-6 adaptive OA questions tailored to solved questions or top skill tier tags.
+    3. Initializes an adaptive viva session and returns IngestLeetCodeResponse with initial_turn.
+    """
+    if not req.username_or_url or not req.username_or_url.strip():
+        raise HTTPException(status_code=400, detail="username_or_url is required.")
+
+    profile = await fetch_leetcode_profile(req.username_or_url.strip())
+    oa_questions = await generate_oa_questions(
+        profile=profile,
+        num_easy=req.num_easy,
+        num_medium=req.num_medium,
+        num_hard=req.num_hard,
+    )
+
+    initial_turn = start_session(
+        mode="dsa",
+        leetcode_data=profile,
+        oa_questions=oa_questions,
+        audio_synthesizer=None,
+    )
+    initial_turn.audio_base64 = ""
+
+    return IngestLeetCodeResponse(
+        session_id=initial_turn.session_id,
+        profile=profile,
+        oa_questions=oa_questions,
+        initial_turn=initial_turn,
+    )
+
+
+
 @app.post("/api/viva/turn", response_model=TurnResponse)
 async def viva_turn(
     request: Request,
@@ -787,11 +830,14 @@ async def viva_turn(
         audio_mime = getattr(turn_req, "audio_mime", None) or body.get("audio_mime")
         if turn_req.audio_base64:
             raw_b64 = turn_req.audio_base64
-            if "," in raw_b64 and "base64" in raw_b64:
+            if not audio_mime and raw_b64.startswith("data:"):
+                header = raw_b64.split(",", 1)[0]
+                mime_part = header.replace("data:", "").replace(";base64", "").strip()
+                if mime_part:
+                    audio_mime = mime_part
+            if "," in raw_b64:
                 raw_b64 = raw_b64.split(",", 1)[1]
-            elif "," in raw_b64:
-                raw_b64 = raw_b64.split(",")[-1]
-            raw_b64 = raw_b64.strip()
+            raw_b64 = "".join(raw_b64.split())
             missing_padding = len(raw_b64) % 4
             if missing_padding:
                 raw_b64 += "=" * (4 - missing_padding)
@@ -834,12 +880,23 @@ async def viva_turn(
             session_id=eff_session_id,
             student_text=eff_student_text,
             code_result=parsed_code_result,
-            selected_author=eff_selected_author,
+            selected_author=None,
             audio_synthesizer=_invoke_m3_tts,
         )
+        if audio_bytes and not eff_student_text:
+            response.verdict = "no_answer"
+            response.student_transcript = "(no speech detected)"
+            response.ack_text = (
+                "I couldn't hear any speech in that recording. "
+                "Please hold Space to speak clearly, then release to submit (or type below)."
+            )
+            if not response.audio_base64 or response.audio_base64 == _generate_silent_wav_base64(250):
+                spoken_text = _build_spoken_text(response.ack_text, response.question_text)
+                response.audio_base64 = _invoke_m3_tts(spoken_text)
+
         print(
             f"[VIVA TURN] audio_bytes={len(audio_bytes) if audio_bytes else 0} "
-            f"transcript={eff_student_text!r} grade={response.verdict}",
+            f"transcript={response.student_transcript!r} grade={response.verdict}",
             flush=True,
         )
         return response
@@ -853,31 +910,82 @@ async def viva_turn(
 @app.post("/api/run-code", response_model=RunCodeResponse)
 async def run_code(req: RunCodeRequest) -> RunCodeResponse:
     """
-    Executes the student's live bug fix against the session's `pytest` suite inside
-    an isolated 4-second subprocess (`sandbox_runner.py`) and records the empirical result.
+    Executes candidate code either via multi-language stdin/stdout sandbox (OA mode)
+    or via isolated 4-second pytest verification (Repo Viva mode).
     """
     session = SESSIONS.get(req.session_id)
-    effective_test_code = req.test_code
+    source = req.source_code or req.student_code or ""
+    effective_driver_code = req.driver_code
+    effective_test_cases = list(req.test_cases) if req.test_cases else []
 
-    if not effective_test_code and session and session.active_challenge:
-        effective_test_code = session.active_challenge.test_code
+    # Backend Session Fallback Lookup:
+    # If driver_code or test_cases are missing in request, retrieve from session state
+    if session and (not effective_driver_code or not effective_test_cases):
+        q_match = None
+        oa_list = getattr(session, "oa_questions", None) or []
+        if req.question_id and oa_list:
+            for q in oa_list:
+                if getattr(q, "question_id", None) == req.question_id:
+                    q_match = q
+                    break
+        if not q_match and oa_list:
+            cur_idx = getattr(session, "current_oa_idx", 0)
+            if 0 <= cur_idx < len(oa_list):
+                q_match = oa_list[cur_idx]
+            else:
+                q_match = oa_list[0]
 
-    result = _invoke_m2_sandbox(
-        file_path=req.file_path,
-        student_code=req.student_code,
-        test_code=effective_test_code or "",
-    )
+        if q_match:
+            lang_key = (req.language or "python").lower().strip()
+            if lang_key in ("c++", "c"):
+                lang_key = "cpp"
+            elif lang_key in ("js", "node"):
+                lang_key = "javascript"
+            elif lang_key in ("openjdk",):
+                lang_key = "java"
+
+            if not effective_driver_code and getattr(q_match, "driver_code", None):
+                effective_driver_code = q_match.driver_code.get(lang_key)
+
+            if not effective_test_cases and getattr(q_match, "test_cases", None):
+                effective_test_cases = list(q_match.test_cases)
+
+    if (
+        effective_test_cases
+        or req.custom_input is not None
+        or (req.language and req.language.lower() in ("cpp", "c++", "java", "javascript", "js"))
+    ):
+        from backend.sandbox.sandbox_runner import execute_multi_language_sandbox
+
+        result = execute_multi_language_sandbox(
+            language=req.language or "python",
+            source_code=source,
+            test_cases=effective_test_cases,
+            run_hidden=req.run_hidden,
+            custom_input=req.custom_input,
+            driver_code=effective_driver_code,
+        )
+    else:
+        effective_test_code = req.test_code
+        if not effective_test_code and session and session.active_challenge:
+            effective_test_code = session.active_challenge.test_code
+
+        result = _invoke_m2_sandbox(
+            file_path=req.file_path or "main.py",
+            student_code=source,
+            test_code=effective_test_code or "",
+        )
 
     if session is not None:
         challenge_desc = (
             session.active_challenge.description
             if session.active_challenge
-            else f"Live sandbox verification on {req.file_path}"
+            else f"Sandbox execution on {req.file_path or 'solution'}"
         )
         session.code_results.append(
             {
                 "challenge_description": challenge_desc,
-                "target_file": req.file_path,
+                "target_file": req.file_path or "main.py",
                 "passed": result.passed,
                 "runtime_ms": result.runtime_ms,
             }
@@ -921,3 +1029,16 @@ async def get_filler_audio_clip() -> Dict[str, str]:
     except Exception:
         pass
     return {"audio_base64": _generate_silent_wav_base64(250)}
+
+
+@app.post("/api/viva/terminate")
+async def terminate_viva_session(req: TerminateSessionRequest) -> Dict[str, str]:
+    """
+    Terminates an active Viva / OA session due to anti-plagiarism fullscreen exit or timeout.
+    Prevents further answers or submissions from being accepted.
+    """
+    session = session_manager.get_session(req.session_id)
+    if session:
+        session.done = True
+        logger.warning(f"Session {req.session_id} terminated: {req.reason}")
+    return {"status": "terminated", "session_id": req.session_id}

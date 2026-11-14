@@ -24,8 +24,8 @@ class CodeHighlight(BaseModel):
 class CodingChallenge(BaseModel):
     description: str = Field(..., description="Explanation of the edge-case or mutation bug to fix")
     target_file: str = Field(..., description="File path where the student should apply the fix")
-    starter_code: str = Field(..., description="Code snippet or full file with the bug / mutation")
-    test_code: str = Field(..., description="pytest snippet executed by sandbox_runner.py")
+    starter_code: str = Field(default="", description="Code snippet or full file with the bug / mutation")
+    test_code: str = Field(default="", description="pytest snippet executed by sandbox_runner.py")
 
 
 # ============================================================================
@@ -201,18 +201,45 @@ class PaperIndex(BaseModel):
 # SANDBOX EXECUTION MODELS (M1 <-> M2 <-> M4)
 # ============================================================================
 
+class OATestCase(BaseModel):
+    stdin: str
+    expected_output: str
+    is_hidden: bool = False
+
+
+class TestCaseResult(BaseModel):
+    case_num: int
+    stdin: str
+    expected_output: str
+    actual_output: str
+    passed: bool
+    is_hidden: bool = False
+    error: Optional[str] = None
+
+
 class RunCodeRequest(BaseModel):
     session_id: str
-    file_path: str
-    student_code: str
+    question_id: Optional[str] = None
+    file_path: Optional[str] = "main.py"
+    student_code: Optional[str] = None
+    source_code: Optional[str] = None
+    language: str = "python"
     test_code: Optional[str] = None
+    test_cases: List[OATestCase] = Field(default_factory=list)
+    run_hidden: bool = False
+    custom_input: Optional[str] = None
+    driver_code: Optional[str] = None
 
 
 class RunCodeResponse(BaseModel):
     passed: bool
+    verdict: str = "Accepted"
     stdout: str
     stderr: str
     runtime_ms: int
+    test_results: List[TestCaseResult] = Field(default_factory=list)
+    total_cases: int = 0
+    passed_cases: int = 0
 
 
 # ============================================================================
@@ -244,6 +271,9 @@ class TurnRequest(BaseModel):
         default=None,
         description="Optional result from live sandbox pytest run"
     )
+
+
+VivaTurnRequest = TurnRequest
 
 
 class TurnResponse(BaseModel):
@@ -382,3 +412,70 @@ class VivaReport(BaseModel):
         "Fluency & Accent Weight: 0% — Graded strictly on technical semantics, "
         "AST-grounded reasoning, and empirical code execution (Koenecke et al., PNAS 2020)."
     )
+
+
+# ============================================================================
+# LEETCODE TELEMETRY & ADAPTIVE OA GENERATOR SCHEMAS
+# ============================================================================
+
+class SkillTagStat(BaseModel):
+    tag_name: str
+    problems_solved: int
+    tier: Literal["Fundamental", "Intermediate", "Advanced"]
+
+
+class OAExample(BaseModel):
+    input: str
+    output: str
+    explanation: Optional[str] = None
+
+
+class OAQuestion(BaseModel):
+    question_id: str = Field(..., description="Unique question identifier, e.g. OA-1")
+    title: str
+    difficulty: Literal["Easy", "Medium", "Hard"]
+    topics: List[str] = Field(default_factory=list)
+    selection_reason: str = Field(
+        ...,
+        description="Explicit citation of why this question was chosen from Category 1 solved titles or Category 2 topic counts",
+    )
+    problem_statement: str
+    examples: List[OAExample] = Field(default_factory=list)
+    constraints: List[str] = Field(default_factory=list)
+    starter_code: Optional[str] = None
+    test_code: Optional[str] = None
+    test_cases: List[OATestCase] = Field(default_factory=list)
+    starter_templates: Dict[str, str] = Field(default_factory=dict)
+    driver_code: Dict[str, str] = Field(default_factory=dict)
+
+
+class LeetCodeProfileData(BaseModel):
+    username: str
+    category: Literal["PUBLIC_SOLVED_LIST", "HIDDEN_TOPIC_COUNTS_ONLY"]
+    primary_language: str
+    total_solved: int
+    easy_solved: int
+    medium_solved: int
+    hard_solved: int
+    recent_ac_titles: List[str] = Field(default_factory=list)
+    skill_tags: List[SkillTagStat] = Field(default_factory=list)
+
+
+class IngestLeetCodeRequest(BaseModel):
+    username_or_url: str
+    num_easy: int = 1
+    num_medium: int = 2
+    num_hard: int = 2
+
+
+class IngestLeetCodeResponse(BaseModel):
+    session_id: str
+    profile: LeetCodeProfileData
+    oa_questions: List[OAQuestion]
+    initial_turn: TurnResponse
+
+
+class TerminateSessionRequest(BaseModel):
+    session_id: str
+    reason: str = "anti_plagiarism_fullscreen_exit"
+
