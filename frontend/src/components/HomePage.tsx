@@ -1,4 +1,4 @@
-import { BookOpen, Code2, FileText, Mic } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Plus, Search } from 'lucide-react'
 
 type Page = 'home' | 'project' | 'dsa' | 'research'
 
@@ -6,323 +6,221 @@ interface Props {
   onNavigate: (page: Page) => void
 }
 
-const CARDS = [
-  {
-    id: 'project' as Page,
-    icon: <Code2 className="h-7 w-7" strokeWidth={1.5} />,
-    label: 'Project Interview Prep',
-    description:
-      'Walk through your GitHub repository with a live AI examiner. Questions escalate from recall to live code challenges — just like a real project viva.',
-    pastel: '#dbdfff',
-    accent: '#4255ff',
-    badge: 'Repo Viva',
-  },
-  {
-    id: 'dsa' as Page,
-    icon: <BookOpen className="h-7 w-7" strokeWidth={1.5} />,
-    label: 'DSA / OA Prep',
-    description:
-      'Practice data structures, algorithms, and online assessment problems with a voice-driven examiner that grades your reasoning and solution step-by-step.',
-    pastel: '#c9f0f8',
-    accent: '#0891b2',
-    badge: 'Coding Round',
-  },
-  {
-    id: 'research' as Page,
-    icon: <FileText className="h-7 w-7" strokeWidth={1.5} />,
-    label: 'Research Paper Prep',
-    description:
-      'Upload a PDF and get interviewed on your paper\'s methodology, results, and trade-offs. The examiner maps your architecture and digs into every section.',
-    pastel: '#ffd6e7',
-    accent: '#db2777',
-    badge: 'Paper Viva',
-  },
-]
-
 export default function HomePage({ onNavigate }: Props) {
   return (
-    <div
-      className="flex min-h-full flex-col"
-      style={{ background: 'var(--color-chalk-canvas)' }}
-    >
-      {/* ── Top Nav ──────────────────────────────────────────────────────── */}
-      <header
-        style={{
-          background: 'var(--color-paper-white)',
-          boxShadow: 'var(--shadow-nav)',
-          position: 'sticky',
-          top: 0,
-          zIndex: 50,
-        }}
-      >
-        <div
-          style={{
-            maxWidth: 1200,
-            margin: '0 auto',
-            padding: '0 24px',
-            height: 56,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Mic
-              className="h-5 w-5"
-              style={{ color: 'var(--color-iris-bolt)' }}
-              strokeWidth={2}
-            />
-            <span
-              style={{
-                fontWeight: 700,
-                fontSize: 18,
-                color: 'var(--color-iris-bolt)',
-                letterSpacing: '-0.3px',
-              }}
-            >
+    <div className="flex min-h-full flex-col bg-[#f6f7fb] text-[#282e3e]">
+      {/* ── Top Navigation Bar (Quizlet style) ───────────────────────────── */}
+      <header className="sticky top-0 z-30 h-[64px] w-full bg-[#ffffff] shadow-[rgba(40,46,62,0.08)_0px_2px_12px_0px]">
+        <div className="mx-auto flex h-full max-w-[1280px] items-center gap-6 px-6">
+          <div className="flex items-center gap-6 shrink-0">
+            <span className="text-[22px] font-bold tracking-tight text-[#4255ff]">
               VivaVoce
             </span>
+
+            <nav aria-label="Primary" className="hidden md:flex items-center gap-5">
+              <button
+                type="button"
+                onClick={() => onNavigate('project')}
+                className="flex items-center gap-1 text-[14px] font-semibold text-[#282e3e] hover:text-[#4255ff] cursor-pointer"
+              >
+                Study tools <ChevronDown className="h-3.5 w-3.5 text-[#586380]" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('dsa')}
+                className="flex items-center gap-1 text-[14px] font-semibold text-[#282e3e] hover:text-[#4255ff] cursor-pointer"
+              >
+                Subjects <ChevronDown className="h-3.5 w-3.5 text-[#586380]" />
+              </button>
+            </nav>
           </div>
-          <span
-            style={{
-              marginLeft: 'auto',
-              fontSize: 13,
-              color: 'var(--color-slate-veil)',
-            }}
-          >
-            AI-powered interview examiner
-          </span>
+
+          {/* Centered Pill Search Bar */}
+          <div className="mx-auto hidden sm:flex max-w-[460px] flex-1 items-center gap-2.5 rounded-[200px] bg-[#f6f7fb] px-4 py-2">
+            <Search className="h-4 w-4 shrink-0 text-[#586380]" aria-hidden />
+            <input
+              type="text"
+              placeholder="Search repos, DSA topics, or papers"
+              aria-label="Search repos, DSA topics, or papers"
+              onKeyDown={e => {
+                if (e.key === 'Enter') onNavigate('project')
+              }}
+              className="min-w-0 flex-1 bg-transparent text-[14px] font-normal text-[#282e3e] placeholder:text-[#939bb4] focus:outline-none"
+            />
+          </div>
+
+          {/* Empty Create & Log in buttons (no-op by design) */}
+          <div className="ml-auto flex items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => {}}
+              className="inline-flex items-center gap-1.5 rounded-[200px] px-3 py-2 text-[14px] font-semibold text-[#4255ff] hover:bg-[#edefff] cursor-pointer"
+            >
+              <Plus className="h-4 w-4" /> Create
+            </button>
+            <button
+              type="button"
+              onClick={() => {}}
+              className="rounded-[200px] bg-[#4255ff] px-5 py-2 text-[14px] font-semibold text-[#ffffff] shadow-[rgba(40,46,62,0.1)_0px_2px_4px_0px] hover:brightness-95 cursor-pointer"
+            >
+              Log in
+            </button>
+          </div>
         </div>
       </header>
 
-      {/* ── Hero ─────────────────────────────────────────────────────────── */}
-      <section
-        style={{
-          textAlign: 'center',
-          padding: '80px 24px 48px',
-          maxWidth: 760,
-          margin: '0 auto',
-        }}
-      >
-        <span
-          style={{
-            display: 'inline-block',
-            background: 'var(--color-lilac-wash)',
-            color: 'var(--color-iris-bolt)',
-            fontWeight: 600,
-            fontSize: 13,
-            padding: '5px 16px',
-            borderRadius: 200,
-            marginBottom: 20,
-            letterSpacing: 0.3,
-          }}
-        >
-          Powered by VivaVoce
-        </span>
-        <h1
-          style={{
-            fontSize: 44,
-            fontWeight: 700,
-            lineHeight: '55px',
-            color: 'var(--color-ink-charcoal)',
-            margin: '0 0 20px',
-          }}
-        >
-          Your AI-Powered{' '}
-          <span style={{ color: 'var(--color-iris-bolt)' }}>Viva Examiner</span>
-        </h1>
-        <p
-          style={{
-            fontSize: 18,
-            lineHeight: '28px',
-            color: 'var(--color-slate-veil)',
-            margin: '0 auto 32px',
-            maxWidth: 560,
-          }}
-        >
-          Choose your preparation mode below. The examiner asks spoken questions
-          at escalating depth — answer by voice or text, get real-time feedback.
-        </p>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {(['L1 Recall', 'L2 Comprehend', 'L3 Analyze', 'L4 Evaluate'] as const).map(l => (
-            <span
-              key={l}
-              style={{
-                background: 'var(--color-paper-white)',
-                border: '1px solid var(--color-mist-border)',
-                borderRadius: 4,
-                padding: '4px 12px',
-                fontSize: 12,
-                fontWeight: 600,
-                color: 'var(--color-slate-veil)',
-              }}
-            >
-              {l}
-            </span>
-          ))}
-          <span style={{ fontSize: 12, color: 'var(--color-fog-mist)', marginLeft: 4 }}>
-            — escalating question depth
-          </span>
-        </div>
-      </section>
-
-      {/* ── 3-Card Grid ──────────────────────────────────────────────────── */}
-      <section
-        style={{
-          maxWidth: 1100,
-          margin: '0 auto',
-          padding: '0 24px 80px',
-          width: '100%',
-          boxSizing: 'border-box',
-        }}
-      >
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-            gap: 24,
-          }}
-        >
-          {CARDS.map(card => (
+      {/* ── Main Hero + 4 Illustrated Mode Cards ─────────────────────────── */}
+      <main className="mx-auto flex w-full max-w-[1280px] flex-1 flex-col items-center justify-center px-6 pt-12 pb-16">
+        {/* Hero Stack */}
+        <div className="mx-auto max-w-[680px] text-center">
+          <h1 className="text-[44px] sm:text-[52px] font-bold leading-[1.15] tracking-[-0.02em] text-[#1a1d28]">
+            VivaVoce
+          </h1>
+          <p className="mt-4 text-[17px] font-normal leading-[1.5] text-[#586380]">
+            Master your codebase, DSA patterns, and research papers with an
+            adaptive spoken examiner and live code verification.
+          </p>
+          <div className="mt-6 flex flex-col items-center gap-3">
             <button
-              key={card.id}
-              onClick={() => onNavigate(card.id)}
-              style={{
-                all: 'unset',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                borderRadius: 24,
-                overflow: 'hidden',
-                boxShadow: 'var(--shadow-card)',
-                background: 'var(--color-paper-white)',
-                border: '1px solid var(--color-mist-border)',
-                transition: 'transform 0.18s, box-shadow 0.18s',
-                textAlign: 'left',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLElement).style.transform =
-                  'translateY(-4px)'
-                ;(e.currentTarget as HTMLElement).style.boxShadow =
-                  'rgba(40,46,62,0.15) 0px 8px 32px 0px'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLElement).style.transform = 'none'
-                ;(e.currentTarget as HTMLElement).style.boxShadow =
-                  'var(--shadow-card)'
-              }}
+              type="button"
+              onClick={() => onNavigate('project')}
+              className="rounded-[200px] bg-[#4255ff] px-7 py-3 text-[15px] font-semibold text-[#ffffff] shadow-[rgba(40,46,62,0.12)_0px_2px_6px_0px] hover:brightness-95 cursor-pointer"
             >
-              {/* Pastel header area */}
-              <div
-                style={{
-                  background: card.pastel,
-                  padding: '32px 28px 24px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 12,
-                }}
-              >
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: 52,
-                    height: 52,
-                    borderRadius: 14,
-                    background: 'rgba(255,255,255,0.7)',
-                    color: card.accent,
-                  }}
-                >
-                  {card.icon}
-                </span>
-                <span
-                  style={{
-                    display: 'inline-block',
-                    background: 'rgba(255,255,255,0.75)',
-                    color: card.accent,
-                    fontSize: 11,
-                    fontWeight: 700,
-                    padding: '3px 10px',
-                    borderRadius: 200,
-                    letterSpacing: 0.5,
-                    textTransform: 'uppercase',
-                    width: 'fit-content',
-                  }}
-                >
-                  {card.badge}
-                </span>
-                <h2
-                  style={{
-                    margin: 0,
-                    fontSize: 22,
-                    fontWeight: 700,
-                    lineHeight: '30px',
-                    color: 'var(--color-ink-charcoal)',
-                  }}
-                >
-                  {card.label}
-                </h2>
-              </div>
+              Sign up for free
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('dsa')}
+              className="text-[14px] font-semibold text-[#4255ff] hover:underline cursor-pointer"
+            >
+              Try coding practice
+            </button>
+          </div>
+        </div>
 
-              {/* White body */}
-              <div
-                style={{
-                  padding: '20px 28px 28px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 20,
-                  flex: 1,
-                }}
-              >
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: 15,
-                    lineHeight: '24px',
-                    color: 'var(--color-slate-veil)',
-                    flex: 1,
-                  }}
-                >
-                  {card.description}
-                </p>
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    background: card.accent,
-                    color: '#fff',
-                    fontWeight: 600,
-                    fontSize: 14,
-                    padding: '10px 22px',
-                    borderRadius: 200,
-                    boxShadow: 'var(--shadow-btn)',
-                    width: 'fit-content',
-                  }}
-                >
-                  Start prep →
-                </span>
+        {/* 4-Card Carousel Row */}
+        <div className="relative mt-12 w-full">
+          {/* Decorative Left / Right Carousel Arrows */}
+          <button
+            type="button"
+            aria-label="Previous mode"
+            onClick={() => onNavigate('project')}
+            className="hidden lg:flex absolute -left-5 top-1/2 z-10 h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-[#d9dde8] bg-[#ffffff] text-[#282e3e] shadow-[rgba(40,46,62,0.1)_0px_4px_12px_0px] hover:bg-[#f6f7fb] cursor-pointer"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Next mode"
+            onClick={() => onNavigate('research')}
+            className="hidden lg:flex absolute -right-5 top-1/2 z-10 h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-[#d9dde8] bg-[#ffffff] text-[#282e3e] shadow-[rgba(40,46,62,0.1)_0px_4px_12px_0px] hover:bg-[#f6f7fb] cursor-pointer"
+          >
+            <ChevronRight className="h-5 w-5" />
+          </button>
+
+          <div className="mx-auto grid max-w-[1040px] grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {/* ── Card 1: Practice Interview (Cyan) ──────────────────────── */}
+            <button
+              type="button"
+              onClick={() => onNavigate('project')}
+              className="group flex h-[340px] flex-col overflow-hidden rounded-[24px] bg-[#9be4f8] pt-6 pl-6 text-left transition-transform duration-150 hover:-translate-y-1 cursor-pointer"
+            >
+              <h2 className="pr-6 text-center text-[20px] font-bold text-[#1a1d28]">
+                Practice Interview
+              </h2>
+              <div className="mt-5 flex flex-1 flex-col justify-between rounded-tl-[16px] bg-[#ffffff] p-5 shadow-[rgba(40,46,62,0.08)_0px_4px_16px_0px]">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="rounded-[4px] bg-[#edefff] px-2 py-0.5 font-mono text-[11px] font-semibold text-[#4255ff]">
+                      scorer.py:6-18
+                    </span>
+                    <span className="text-[11px] font-semibold text-[#586380]">L2 Why</span>
+                  </div>
+                  <p className="font-mono text-[12px] leading-5 text-[#282e3e]">
+                    def cosine_rerank(q, d):
+                    <br />
+                    <span className="bg-[#edefff] px-1 text-[#4255ff]">
+                      return dot / (norm_q * norm_d)
+                    </span>
+                  </p>
+                </div>
+                <div className="rounded-[8px] border border-[#d9dde8] bg-[#f6f7fb] px-3 py-2 text-[12px] text-[#939bb4]">
+                  Hold Space or type answer...
+                </div>
               </div>
             </button>
-          ))}
-        </div>
-      </section>
 
-      {/* ── Footer ───────────────────────────────────────────────────────── */}
-      <footer
-        style={{
-          borderTop: '1px solid var(--color-mist-border)',
-          padding: '24px',
-          textAlign: 'center',
-          fontSize: 13,
-          color: 'var(--color-fog-mist)',
-          background: 'var(--color-paper-white)',
-        }}
-      >
-        VivaVoce — AI Interview Examiner &nbsp;·&nbsp; Grading ignores grammar,
-        accent & vocal energy: fluency weight is 0%.
-      </footer>
+            {/* ── Card 2: Study a Paper (Magenta/Lavender) ───────────────── */}
+            <button
+              type="button"
+              onClick={() => onNavigate('research')}
+              className="group flex h-[340px] flex-col overflow-hidden rounded-[24px] bg-[#eab4ff] pt-6 pl-6 text-left transition-transform duration-150 hover:-translate-y-1 cursor-pointer"
+            >
+              <h2 className="pr-6 text-center text-[20px] font-bold text-[#1a1d28]">
+                Study a Paper
+              </h2>
+              <div className="mt-5 flex flex-1 flex-col rounded-tl-[16px] bg-[#ffffff] p-5 shadow-[rgba(40,46,62,0.08)_0px_4px_16px_0px]">
+                <div className="text-[17px] font-bold text-[#1a1d28]">GraphCodeBERT</div>
+                <div className="mt-1 flex items-center gap-3 border-b border-[#d9dde8] pb-2 text-[11px] font-semibold">
+                  <span className="text-[#586380]">Outline</span>
+                  <span className="border-b-2 border-[#4255ff] pb-0.5 text-[#1a1d28]">
+                    Concept Map
+                  </span>
+                </div>
+                <div className="mt-3 space-y-2 text-[11px]">
+                  <div className="grid grid-cols-3 gap-2 border-b border-[#f0f2f7] pb-1.5">
+                    <span className="font-semibold text-[#4255ff]">N1</span>
+                    <span className="col-span-2 text-[#586380]">AST Data-Flow Graph</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 border-b border-[#f0f2f7] pb-1.5">
+                    <span className="font-semibold text-[#4255ff]">N2</span>
+                    <span className="col-span-2 text-[#586380]">Contrastive Alignment</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <span className="font-semibold text-[#4255ff]">N3</span>
+                    <span className="col-span-2 text-[#586380]">Pass@k Verification</span>
+                  </div>
+                </div>
+              </div>
+            </button>
+
+            {/* ── Card 3: Coding Practice (Deep Brand Violet) ────────────── */}
+            <button
+              type="button"
+              onClick={() => onNavigate('dsa')}
+              className="group flex h-[340px] flex-col overflow-hidden rounded-[24px] bg-[#423ed8] pt-6 px-6 text-left transition-transform duration-150 hover:-translate-y-1 cursor-pointer"
+            >
+              <h2 className="text-center text-[20px] font-bold text-[#ffffff]">
+                Coding Practice
+              </h2>
+              <div className="relative mt-8 flex flex-1 items-center justify-center">
+                {/* Back card */}
+                <div className="absolute bottom-6 h-[155px] w-[88%] rounded-[14px] bg-[#ffffff]/25" />
+                {/* Tilted front flashcard */}
+                <div className="relative flex h-[165px] w-full -rotate-2 flex-col justify-between rounded-[14px] bg-[#ffffff] p-5 shadow-[rgba(20,24,40,0.22)_0px_8px_24px_0px] transition-transform duration-150 group-hover:rotate-0">
+                  <div className="flex items-center justify-between">
+                    <span className="rounded-[200px] bg-[#edefff] px-2.5 py-0.5 text-[11px] font-semibold text-[#4255ff]">
+                      LeetCode Sync
+                    </span>
+                    <span className="font-mono text-[11px] font-semibold text-[#586380]">
+                      O(n)
+                    </span>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[18px] font-bold text-[#1a1d28]">Two Sum</div>
+                    <div className="mt-1 text-[12px] text-[#586380]">
+                      Hash Map Complement Lookup
+                    </div>
+                  </div>
+                  <div className="text-center text-[11px] font-semibold text-[#4255ff]">
+                    Adaptive next problem →
+                  </div>
+                </div>
+              </div>
+            </button>
+          </div>
+        </div>
+      </main>
     </div>
   )
 }

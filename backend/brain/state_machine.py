@@ -30,6 +30,7 @@ from backend.models.schemas import (
     ASTFunctionSymbol,
     CodeHighlight,
     CodingChallenge,
+    LeetCodeProfileSummary,
     PaperIndex,
     PaperNode,
     RepoIndex,
@@ -85,10 +86,14 @@ class TurnRecord:
 @dataclass
 class VivaSession:
     session_id: str
-    mode: Literal["repo", "paper"]
+    mode: Literal["repo", "paper", "dsa"]
     title: str
     repo_index: Optional[RepoIndex] = None
     paper_index: Optional[PaperIndex] = None
+    dsa_profile: Optional[LeetCodeProfileSummary] = None
+    dsa_topic: str = "Arrays & Hashing"
+    current_dsa_problem: Any = None
+    solved_dsa_ids: List[str] = field(default_factory=list)
     selected_author: Optional[str] = None
     current_depth: int = 1
     current_symbol_idx: int = 0
@@ -487,19 +492,30 @@ class SessionManager:
 
     def start_session(
         self,
-        mode: Literal["repo", "paper"],
+        mode: Literal["repo", "paper", "dsa"],
         repo_index: Optional[RepoIndex] = None,
         paper_index: Optional[PaperIndex] = None,
         selected_author: Optional[str] = None,
         audio_synthesizer: Optional[Callable[[str], str]] = None,
+        dsa_profile: Optional[LeetCodeProfileSummary] = None,
+        dsa_topic: str = "Arrays & Hashing",
     ) -> TurnResponse:
         """Initializes a new viva session at Bloom Level 1 (Recall) and emits the opening turn."""
         session_id = str(uuid.uuid4())
-        title = (
-            repo_index.repo_name
-            if mode == "repo" and repo_index
-            else (paper_index.title if paper_index else "VivaVoce Session")
-        )
+        if mode == "repo" and repo_index:
+            title = repo_index.repo_name
+        elif mode == "dsa" and dsa_profile:
+            title = f"LeetCode DSA Prep ({dsa_profile.username} — {dsa_topic})"
+        elif paper_index:
+            title = paper_index.title
+        else:
+            title = "VivaVoce Session"
+
+        initial_problem = None
+        if mode == "dsa" and dsa_profile is not None:
+            from backend.brain.dsa_coach import pick_initial_problem
+
+            initial_problem = pick_initial_problem(dsa_profile, dsa_topic)
 
         session = VivaSession(
             session_id=session_id,
@@ -507,6 +523,9 @@ class SessionManager:
             title=title,
             repo_index=repo_index,
             paper_index=paper_index,
+            dsa_profile=dsa_profile,
+            dsa_topic=dsa_topic,
+            current_dsa_problem=initial_problem,
             selected_author=selected_author,
             current_depth=1,
             current_symbol_idx=0,
@@ -562,6 +581,15 @@ class SessionManager:
 
         if session.mode == "repo":
             return self._process_repo_turn(
+                session=session,
+                raw_transcript=raw_transcript,
+                clean_transcript=clean_transcript,
+                code_result=code_result,
+                audio_synthesizer=audio_synthesizer,
+                is_initial_turn=is_initial_turn,
+            )
+        elif session.mode == "dsa":
+            return self._process_dsa_turn(
                 session=session,
                 raw_transcript=raw_transcript,
                 clean_transcript=clean_transcript,
@@ -847,16 +875,167 @@ class SessionManager:
         )
 
 
+    def _process_dsa_turn(
+        self,
+        session: VivaSession,
+        raw_transcript: str,
+        clean_transcript: str,
+        code_result: Optional[RunCodeResponse],
+        audio_synthesizer: Optional[Callable[[str], str]],
+        is_initial_turn: bool,
+    ) -> TurnResponse:
+        from backend.brain.dsa_coach import (
+            DSA_PROBLEMS,
+            detect_student_lacks,
+            pick_next_problem,
+        )
+
+        problem = session.current_dsa_problem or DSA_PROBLEMS[0]
+        session.current_dsa_problem = problem
+        profile = session.dsa_profile
+
+        if is_initial_turn and not session.turns:
+            verdict: VerdictType = "start"
+            next_depth = 1
+            weak_summary = (
+                ", ".join(profile.weak_topics[:2])
+                if profile and profile.weak_topics
+                else session.dsa_topic
+            )
+            ack_text = (
+                f"Connected LeetCode profile @{profile.username} "
+                f"({profile.total_solved} solved; focus areas: {weak_summary})."
+                if profile
+                else f"Started DSA Prep on {session.dsa_topic}."
+            )
+            question_text = (
+                f"Problem 1 [{problem.difficulty}]: {problem.title}. {problem.prompt_summary} "
+                f"Before coding in `{problem.target_file}`, explain your approach and target time/space complexity."
+            )
+            action = "TriggerCodeChallenge"
+        else:
+            lacks = detect_student_lacks(clean_transcript, code_result, problem)
+            if code_result is not None:
+                if code_result.passed:
+                    verdict = "strong"
+                    session.solved_dsa_ids.append(problem.problem_id)
+                    next_depth = min(4, session.current_depth + 1)
+                    next_prob = pick_next_problem(
+                        topic=session.dsa_topic,
+                        current_problem=problem,
+                        lacks=lacks,
+                        passed_sandbox=True,
+                        solved_ids=set(session.solved_dsa_ids),
+                    )
+                    session.current_dsa_problem = next_prob
+                    problem = next_prob
+                    lack_note = (
+                        f" Watch out for: {lacks[0]}."
+                        if lacks
+                        else " Complexity and edge cases look solid."
+                    )
+                    ack_text = f"All pytest cases passed in {code_result.runtime_ms}ms!{lack_note}"
+                    question_text = (
+                        f"Moving to your next adaptive problem [{problem.difficulty}]: {problem.title} "
+                        f"({problem.pattern}). {problem.prompt_summary} Explain your strategy and implement it in `{problem.target_file}`."
+                    )
+                    action = "TriggerCodeChallenge"
+                else:
+                    verdict = "partial"
+                    next_depth = max(2, session.current_depth)
+                    ack_text = (
+                        f"Your code failed a sandbox test—gap detected in {problem.edge_case_focus}."
+                    )
+                    question_text = (
+                        f"Look at `{problem.target_file}`: why does your current logic break on {problem.edge_case_focus}? "
+                        f"Explain the fix or update the code and click Run & Verify."
+                    )
+                    action = "Probe"
+            else:
+                # Spoken / typed conceptual explanation
+                word_count = len(clean_transcript.split())
+                if not clean_transcript:
+                    verdict = "no_answer"
+                elif not lacks and word_count >= 7:
+                    verdict = "strong"
+                elif word_count >= 5:
+                    verdict = "partial"
+                else:
+                    verdict = "weak"
+
+                if verdict == "strong":
+                    next_depth = min(4, session.current_depth + 1)
+                    ack_text = f"Good reasoning on {problem.pattern} ({problem.optimal_complexity})."
+                    question_text = (
+                        f"Now implement `{problem.title}` in `{problem.target_file}` (pay attention to {problem.edge_case_focus}) "
+                        f"and click Run & Verify to prove it passes all pytest cases."
+                    )
+                    action = "TriggerCodeChallenge"
+                else:
+                    next_depth = session.current_depth
+                    gap_msg = lacks[0] if lacks else f"handling {problem.edge_case_focus}"
+                    ack_text = f"I noticed a gap in: {gap_msg}."
+                    question_text = (
+                        f"For {problem.title}, how can you apply {problem.pattern} to reach {problem.optimal_complexity} "
+                        f"while handling {problem.edge_case_focus}?"
+                    )
+                    action = "Hint"
+
+        challenge = problem.to_coding_challenge()
+        session.active_challenge = challenge
+        session.current_depth = next_depth
+        turn_number = len(session.turns) + 1
+        if turn_number >= session.max_turns:
+            session.done = True
+
+        spoken_script = f"{ack_text} {question_text}".strip()
+        audio_b64 = audio_synthesizer(spoken_script) if audio_synthesizer else ""
+        topic_label = f"{problem.topic}: {problem.title} ({problem.difficulty})"
+
+        record = TurnRecord(
+            turn_index=turn_number,
+            student_raw_transcript=raw_transcript,
+            student_clean_transcript=clean_transcript,
+            verdict=verdict,
+            action=action,
+            ack_text=ack_text,
+            question_text=question_text,
+            topic=topic_label,
+            depth_level=session.current_depth,
+            coding_challenge=challenge,
+            code_result=code_result,
+        )
+        session.turns.append(record)
+
+        return TurnResponse(
+            session_id=session.session_id,
+            student_transcript=raw_transcript or clean_transcript,
+            verdict=verdict,
+            ack_text=ack_text,
+            question_text=question_text,
+            audio_base64=audio_b64,
+            topic=topic_label,
+            depth_level=session.current_depth,
+            highlight=None,
+            diagram_node_id=None,
+            paper_excerpt=None,
+            coding_challenge=challenge,
+            done=session.done,
+        )
+
+
 # Singleton manager + module-level convenience functions matching Section 5 table
 session_manager = SessionManager(SESSIONS)
 
 
 def start_session(
-    mode: Literal["repo", "paper"],
+    mode: Literal["repo", "paper", "dsa"],
     repo_index: Optional[RepoIndex] = None,
     paper_index: Optional[PaperIndex] = None,
     selected_author: Optional[str] = None,
     audio_synthesizer: Optional[Callable[[str], str]] = None,
+    dsa_profile: Optional[LeetCodeProfileSummary] = None,
+    dsa_topic: str = "Arrays & Hashing",
 ) -> TurnResponse:
     """Module-level entrypoint to start a new VivaVoce session."""
     return session_manager.start_session(
@@ -865,6 +1044,8 @@ def start_session(
         paper_index=paper_index,
         selected_author=selected_author,
         audio_synthesizer=audio_synthesizer,
+        dsa_profile=dsa_profile,
+        dsa_topic=dsa_topic,
     )
 
 

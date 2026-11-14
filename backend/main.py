@@ -31,6 +31,7 @@ from backend.brain.grader import generate_final_report
 from backend.brain.state_machine import SESSIONS, process_turn, start_session
 from backend.models.schemas import (
     ASTFunctionSymbol,
+    IngestDsaRequest,
     IngestRepoRequest,
     IngestResponse,
     OwnedSymbol,
@@ -592,6 +593,73 @@ async def ingest_pdf(
         files=[],
         mermaid_graph=paper_index.mermaid_graph,
         paper_nodes=paper_index.nodes,
+        initial_turn=initial_turn,
+    )
+
+
+@app.post("/api/ingest-dsa", response_model=IngestResponse)
+async def ingest_dsa(req: IngestDsaRequest) -> IngestResponse:
+    """
+    1. Fetches public LeetCode profile stats for `req.leetcode_username`.
+    2. Calibrates initial DSA problem for `req.topic` based on solved distribution & weak spots.
+    3. Returns a `README.md` diagnostic summary + starter problem file and starts an adaptive DSA Prep session.
+    """
+    from backend.brain.dsa_coach import fetch_leetcode_profile
+
+    if not req.leetcode_username or not req.leetcode_username.strip():
+        raise HTTPException(status_code=400, detail="leetcode_username is required.")
+
+    profile = fetch_leetcode_profile(req.leetcode_username)
+
+    initial_turn = start_session(
+        mode="dsa",
+        dsa_profile=profile,
+        dsa_topic=req.topic,
+        audio_synthesizer=_invoke_m3_tts,
+    )
+
+    readme_content = (
+        f"# DSA Prep — @{profile.username}\n\n"
+        f"- **Selected Topic:** {req.topic}\n"
+        f"- **LeetCode Profile Source:** {'Live LeetCode GraphQL' if profile.fetched_live else 'Cached / Offline Fallback'}\n"
+        f"- **Solved:** {profile.total_solved} total "
+        f"(Easy: {profile.easy_solved}, Medium: {profile.medium_solved}, Hard: {profile.hard_solved})\n"
+        f"- **Detected Focus Areas:** {', '.join(profile.weak_topics) or req.topic}\n"
+        f"- **Recent Submissions:** {', '.join(profile.recent_submissions) or 'N/A'}\n\n"
+        "## How Adaptive DSA Prep Works\n"
+        "1. Click **Start Viva (Question 1)** on the right panel.\n"
+        "2. Explain your approach & time/space complexity by voice or text.\n"
+        "3. Edit the starter code in the Monaco IDE and click **Run & Verify**.\n"
+        "4. VivaVoce detects gaps (complexity, edge cases, brute force) and serves your next problem adaptively.\n"
+    )
+
+    files = [
+        RepoFile(
+            path="README.md",
+            content=readme_content,
+            language="markdown",
+            line_count=len(readme_content.splitlines()),
+        )
+    ]
+    if initial_turn.coding_challenge:
+        files.append(
+            RepoFile(
+                path=initial_turn.coding_challenge.target_file,
+                content=initial_turn.coding_challenge.starter_code,
+                language="python",
+                line_count=len(initial_turn.coding_challenge.starter_code.splitlines()),
+            )
+        )
+
+    return IngestResponse(
+        session_id=initial_turn.session_id,
+        mode="dsa",
+        title=f"DSA Prep: @{profile.username} ({req.topic})",
+        authors=[],
+        files=files,
+        mermaid_graph=None,
+        paper_nodes=[],
+        dsa_profile=profile,
         initial_turn=initial_turn,
     )
 
