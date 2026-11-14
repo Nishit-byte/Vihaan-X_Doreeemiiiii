@@ -217,6 +217,7 @@ export default function DsaPage({ onBack }: Props) {
   const [activeQuestionIdx, setActiveQuestionIdx] = useState<number>(0)
 
   // Active Assessment Session
+  const [oaSessionId, setOaSessionId] = useState<string | null>(null)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [solvedMap, setSolvedMap] = useState<Record<string, boolean>>({})
 
@@ -245,7 +246,7 @@ export default function DsaPage({ onBack }: Props) {
       if (res.oa_questions && res.oa_questions.length > 0) {
         setGeneratedOaQuestions(res.oa_questions)
       }
-      setActiveSessionId(res.session_id)
+      setOaSessionId(res.session_id)
     } catch (e) {
       setIngestError(e instanceof Error ? e.message : 'Failed to ingest LeetCode profile.')
     } finally {
@@ -258,10 +259,8 @@ export default function DsaPage({ onBack }: Props) {
     // 1. Synchronously trigger fullscreen as line 1
     triggerFullscreen()
     setActiveQuestionIdx(idx)
-    const sid = activeSessionId || `oa_${Date.now()}`
-    if (!activeSessionId) {
-      setActiveSessionId(sid)
-    }
+    const sid = oaSessionId || activeSessionId || `oa_${Date.now()}`
+    setActiveSessionId(sid)
     startProctoredSession(sid)
   }
 
@@ -272,8 +271,8 @@ export default function DsaPage({ onBack }: Props) {
   async function finishAssessment() {
     if (!activeSessionId) return
     const sid = activeSessionId
-    setActiveSessionId(null)
     await endProctoredSession()
+    setActiveSessionId(null)
     setShowReport(true)
     setReportLoading(true)
     setReportError(null)
@@ -315,6 +314,9 @@ export default function DsaPage({ onBack }: Props) {
   function handleBack() {
     if (activeSessionId) {
       // Exit compiler workspace back to OA questions overview
+      if (!window.confirm('Leave active OA question? Exiting full screen will end the proctored assessment.')) {
+        return
+      }
       endProctoredSession().catch(() => {})
       setActiveSessionId(null)
       return
