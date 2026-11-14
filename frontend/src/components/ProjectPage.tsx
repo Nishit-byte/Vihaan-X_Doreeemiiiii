@@ -3,12 +3,13 @@
  * Wraps the existing repo-viva session flow in the Quizlet light theme.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowLeft, GitBranch, Mic, Play, RotateCcw, Users } from 'lucide-react'
+import { ArrowLeft, GitBranch, Mic, Play, RotateCcw } from 'lucide-react'
 import IdeWorkspace from './IdeWorkspace'
 import ExaminerPanel from './ExaminerPanel'
 import ReportModal from './ReportModal'
 import { fetchReport, ingestRepo, submitTurn, subscribeDemoMode } from '../services/apiClient'
 import type { IngestResponse, RunCodeResponse, TurnResponse, VivaReport } from '../types/api'
+import { useProctor, ProctorStatusPill, triggerFullscreen } from '../context/ProctorContext'
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong')
 
@@ -30,6 +31,14 @@ export default function ProjectPage({ onBack }: Props) {
   const [report, setReport] = useState<VivaReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
+  const { startProctoredSession, endProctoredSession, terminatedDueToViolation } = useProctor()
+
+  useEffect(() => {
+    if (terminatedDueToViolation) {
+      setTurn(null)
+      setPendingFirstTurn(null)
+    }
+  }, [terminatedDueToViolation])
 
   useEffect(() => subscribeDemoMode(setDemo), [])
 
@@ -39,9 +48,16 @@ export default function ProjectPage({ onBack }: Props) {
   }
 
   const startViva = useCallback(() => {
+    // 1. Synchronously trigger fullscreen as line 1
+    triggerFullscreen()
     if (!pendingFirstTurn) return
-    setTurn(pendingFirstTurn); setHistory([pendingFirstTurn]); setPendingFirstTurn(null)
-  }, [pendingFirstTurn])
+    if (session) {
+      startProctoredSession(session.session_id)
+    }
+    setTurn(pendingFirstTurn)
+    setHistory([pendingFirstTurn])
+    setPendingFirstTurn(null)
+  }, [pendingFirstTurn, session, startProctoredSession])
 
   async function guarded(fn: () => Promise<void>) {
     setBusy(true); setError(null)
@@ -66,6 +82,7 @@ export default function ProjectPage({ onBack }: Props) {
 
   async function finish() {
     if (!session) return
+    await endProctoredSession()
     setShowReport(true); setReportLoading(true); setReportError(null)
     try { setReport(await fetchReport(session.session_id)) }
     catch (e) { setReportError(errMsg(e)) }
@@ -74,6 +91,7 @@ export default function ProjectPage({ onBack }: Props) {
 
   function handleBack() {
     if (session && !window.confirm('Leave this viva? Progress is lost unless you press Finish first.')) return
+    endProctoredSession().catch(() => {})
     onBack()
   }
 
@@ -113,6 +131,8 @@ export default function ProjectPage({ onBack }: Props) {
           }}>
             Project Repo Viva
           </span>
+
+          <ProctorStatusPill />
 
           {/* Controls */}
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
@@ -163,26 +183,6 @@ export default function ProjectPage({ onBack }: Props) {
             >
               Demo repo
             </button>
-
-            {/* Author picker */}
-            {(session?.authors ?? []).length > 0 && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--color-slate-veil)' }}>
-                <Users className="h-4 w-4" />
-                <select
-                  value={author ?? ''}
-                  onChange={e => changeAuthor(e.target.value || null)}
-                  disabled={busy}
-                  style={{
-                    background: 'var(--color-paper-white)', border: '1px solid var(--color-mist-border)',
-                    borderRadius: 4, padding: '6px 10px', fontSize: 13, color: 'var(--color-ink-charcoal)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <option value="">All authors</option>
-                  {session?.authors.map(a => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </label>
-            )}
 
             {demo && (
               <span style={{ fontSize: 11, color: 'var(--color-fog-mist)', background: 'var(--color-chalk-canvas)', border: '1px solid var(--color-mist-border)', borderRadius: 200, padding: '3px 10px' }}>

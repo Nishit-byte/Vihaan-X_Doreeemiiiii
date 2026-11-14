@@ -405,7 +405,7 @@ export function mockTurn(req: TurnRequest): TurnResponse {
 
 export async function mockRun(req: RunCodeRequest): Promise<RunCodeResponse> {
   await new Promise(r => setTimeout(r, 700))
-  const code = req.student_code
+  const code = req.student_code ?? req.source_code ?? ''
   const fixed = req.file_path === 'similarity.py'
     ? /==\s*0|<=\s*0|if not|eps|1e-/.test(code.split('def cosine_similarity')[1] ?? '')
     : !code.includes('NotImplementedError') && /return\s+\S/.test(code)

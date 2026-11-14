@@ -22,6 +22,8 @@
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { TurnResponse, Verdict } from '../types/api'
+import { submitTurn } from '../services/apiClient'
+import { triggerFullscreen } from '../utils/fullscreen'
 import {
   RecordedAudio,
   RecorderStatus,
@@ -828,7 +830,10 @@ function QuestionCard({
           </p>
           <button
             type="button"
-            onClick={onStartViva}
+            onClick={() => {
+              triggerFullscreen()
+              onStartViva?.()
+            }}
             disabled={busy || disabled}
             className="rounded-md bg-nuxt-signal px-4 py-1.5 text-xs font-semibold text-void-canvas hover:opacity-90 disabled:opacity-40 transition active:scale-95 select-none"
           >
@@ -1183,7 +1188,7 @@ export default function ExaminerPanel({
   onRequestReport,
   fillersUrl = '/api/voice/fillers',
   disabled = false,
-  sessionId: _sessionId,
+  sessionId,
   mode: _mode,
   turn,
   history,
@@ -1262,6 +1267,8 @@ export default function ExaminerPanel({
   onSubmitTextRef.current = onSubmitText
   const onTurnRef = useRef(onTurn)
   onTurnRef.current = onTurn
+  const sessionIdRef = useRef(sessionId)
+  sessionIdRef.current = sessionId
 
   // State & props refs for keyboard and event listeners
   const panelStateRef = useRef(panelState)
@@ -1489,11 +1496,19 @@ export default function ExaminerPanel({
       const currentReqId = ++requestIdRef.current
 
       try {
-        const submitFn = onSubmitAudioRef.current
-        if (!submitFn) {
-          throw new Error('No onSubmitAudio handler provided to ExaminerPanel')
+        let nextTurn: ExaminerTurnLike
+        if (onSubmitAudioRef.current) {
+          nextTurn = await onSubmitAudioRef.current(rec)
+        } else if (sessionIdRef.current) {
+          const res = await submitTurn({
+            session_id: sessionIdRef.current,
+            audio_base64: rec.base64,
+            audio_mime: rec.mimeType,
+          })
+          nextTurn = res as ExaminerTurnLike
+        } else {
+          throw new Error('No session ID or onSubmitAudio handler provided to ExaminerPanel')
         }
-        const nextTurn = await submitFn(rec)
 
         // Ignore late responses arriving after cancellation or unmount
         if (!isMountedRef.current || requestIdRef.current !== currentReqId) return
@@ -1554,11 +1569,18 @@ export default function ExaminerPanel({
     const currentReqId = ++requestIdRef.current
 
     try {
-      const submitFn = onSubmitTextRef.current
-      if (!submitFn) {
-        throw new Error('No onSubmitText handler provided to ExaminerPanel')
+      let nextTurn: ExaminerTurnLike
+      if (onSubmitTextRef.current) {
+        nextTurn = await onSubmitTextRef.current(text)
+      } else if (sessionIdRef.current) {
+        const res = await submitTurn({
+          session_id: sessionIdRef.current,
+          student_text: text,
+        })
+        nextTurn = res as ExaminerTurnLike
+      } else {
+        throw new Error('No session ID or onSubmitText handler provided to ExaminerPanel')
       }
-      const nextTurn = await submitFn(text)
 
       if (!isMountedRef.current || requestIdRef.current !== currentReqId) return
 
@@ -1615,9 +1637,18 @@ export default function ExaminerPanel({
         playRandomFiller()
         const currentReqId = ++requestIdRef.current
         try {
-          const submitFn = onSubmitTextRef.current
-          if (!submitFn) throw new Error('No onSubmitText handler provided to ExaminerPanel')
-          const nextTurn = await submitFn(lastSub.text)
+          let nextTurn: ExaminerTurnLike
+          if (onSubmitTextRef.current) {
+            nextTurn = await onSubmitTextRef.current(lastSub.text)
+          } else if (sessionIdRef.current) {
+            const res = await submitTurn({
+              session_id: sessionIdRef.current,
+              student_text: lastSub.text,
+            })
+            nextTurn = res as ExaminerTurnLike
+          } else {
+            throw new Error('No session ID or onSubmitText handler provided to ExaminerPanel')
+          }
           if (!isMountedRef.current || requestIdRef.current !== currentReqId) return
           if (activeFillerRef.current) {
             activeFillerRef.current.stop()
@@ -1643,11 +1674,12 @@ export default function ExaminerPanel({
   }, [handleAudioSubmit, stopCurrentPlayback, playRandomFiller, handleTurnResponse])
 
   // Hook instance under test (Task B2 & B6)
-  const isHookEnabled = !disabled && panelState !== 'done' && panelState !== 'thinking'
+  const isHookEnabled = !disabled && panelState !== 'done'
+  const isSpacebarEnabled = isHookEnabled && panelState !== 'thinking'
 
   const recorder = usePushToTalkRecorder({
     enabled: isHookEnabled,
-    bindSpacebar: isHookEnabled,
+    bindSpacebar: isSpacebarEnabled,
     minDurationMs: 300,
     maxDurationMs: 60000,
     onRecordingComplete: (rec) => {
