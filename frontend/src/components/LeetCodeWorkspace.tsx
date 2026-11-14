@@ -518,31 +518,6 @@ export default function LeetCodeWorkspace({
             >
               <RotateCcw className="h-3 w-3" /> Reset Code
             </button>
-
-            <div className="h-4 w-px bg-mist-border mx-1" />
-
-            {/* Fullscreen Proctoring Toggle */}
-            <button
-              onClick={async () => {
-                try {
-                  if (!document.fullscreenElement && document.documentElement) {
-                    await document.documentElement.requestFullscreen()
-                  }
-                } catch (e) {
-                  console.warn(e)
-                }
-                await startProctoredSession(sessionId)
-              }}
-              title="Enter Full Screen Proctored Mode"
-              className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded border transition cursor-pointer ${
-                isFullscreen
-                  ? 'bg-green-50 text-green-700 border-green-200'
-                  : 'bg-paper-white text-iris-bolt border-indigo-200 hover:bg-lilac-wash'
-              }`}
-            >
-              <Maximize2 className="h-3.5 w-3.5" />
-              <span>{isFullscreen ? 'Full Screen On' : 'Full Screen'}</span>
-            </button>
           </div>
         </div>
 
