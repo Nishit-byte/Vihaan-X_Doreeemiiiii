@@ -1,4 +1,5 @@
 import type {
+  IngestLeetCodeRequest, IngestLeetCodeResponse,
   IngestRepoRequest, IngestResponse, RunCodeRequest, RunCodeResponse,
   TurnRequest, TurnResponse, VivaReport,
 } from '../types/api'
@@ -156,8 +157,9 @@ export function submitTurn(req: TurnRequest) {
   return withFallback(() => request<TurnResponse>('/viva/turn', json(req)), () => mockTurn(req))
 }
 
-export function runCode(req: RunCodeRequest) {
-  return withFallback(() => request<RunCodeResponse>('/run-code', json(req)), () => mockRun(req))
+export function runCode(req: RunCodeRequest): Promise<RunCodeResponse> {
+  // Always invoke live FastAPI sandbox verification endpoint
+  return request<RunCodeResponse>('/run-code', json(req))
 }
 
 export function fetchReport(sessionId: string) {
@@ -165,4 +167,20 @@ export function fetchReport(sessionId: string) {
     async () => normalizeReport(await request<BackendVivaReport>(`/report/${sessionId}`)),
     () => mockReport(sessionId),
   )
+}
+
+export function ingestLeetCode(
+  username_or_url: string,
+  num_easy = 1,
+  num_medium = 2,
+  num_hard = 2,
+): Promise<IngestLeetCodeResponse> {
+  const body: IngestLeetCodeRequest = {
+    username_or_url,
+    num_easy,
+    num_medium,
+    num_hard,
+  }
+  // Always invoke live FastAPI endpoint for dynamic Gemini question generation per LeetCode ID
+  return request<IngestLeetCodeResponse>('/ingest-leetcode', json(body))
 }
