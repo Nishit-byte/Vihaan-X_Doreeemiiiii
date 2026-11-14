@@ -15,13 +15,21 @@ Routes Mounted:
 from __future__ import annotations
 
 import base64
+from contextlib import asynccontextmanager
 import inspect
 import io
 import os
+from pathlib import Path
 import struct
+import sys
 import time
 import wave
 from typing import Any, Dict, Optional
+
+# Ensure project root is in sys.path so 'backend.xxx' imports resolve when run from inside backend/
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -45,23 +53,42 @@ from backend.models.schemas import (
     TurnResponse,
     VivaReport,
 )
+from backend.voice import voice_router, warm_filler_cache
 
 load_dotenv()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        await warm_filler_cache()
+    except Exception:
+        pass
+    yield
 
 app = FastAPI(
     title="VivaVoce Modular Monolith API",
     description="Dual-modality AST-grounded & Visual Concept-Map Technical Examiner",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
-# Enable wide CORS for Vite React frontend (Port 5173)
+# Enable wide CORS for Vite React frontend (Port 5173) and local development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "*",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount M3 voice router for /api/voice/health, /api/voice/fillers, etc.
+app.include_router(voice_router, prefix="/api/voice")
 
 
 # ============================================================================
@@ -396,7 +423,11 @@ def _invoke_m2_sandbox(
             )
 
 
-async def _invoke_m3_stt(audio_bytes: bytes, domain_prompt: str = "") -> str:
+async def _invoke_m3_stt(
+    audio_bytes: bytes,
+    domain_prompt: str = "",
+    mime_type: Optional[str] = None,
+) -> str:
     """Calls M3's `transcribe_audio` (sync or async) in `backend/voice/stt_service.py`."""
     try:
         from backend.voice import stt_service  # type: ignore
@@ -407,6 +438,8 @@ async def _invoke_m3_stt(audio_bytes: bytes, domain_prompt: str = "") -> str:
             kwargs: Dict[str, Any] = {}
             if "domain_prompt" in sig.parameters:
                 kwargs["domain_prompt"] = domain_prompt
+            if "mime_type" in sig.parameters:
+                kwargs["mime_type"] = mime_type
             res = fn(audio_bytes, **kwargs)
             if inspect.isawaitable(res):
                 res = await res
@@ -417,12 +450,39 @@ async def _invoke_m3_stt(audio_bytes: bytes, domain_prompt: str = "") -> str:
     return ""
 
 
+def _build_spoken_text(examiner_message: Optional[str], question: Optional[str]) -> str:
+    """Combines examiner_message and question cleanly without duplicating text."""
+    try:
+        from backend.voice.tts_service import build_spoken_text
+        return build_spoken_text(examiner_message or "", question or "")
+    except Exception:
+        ack = (examiner_message or "").strip()
+        q = (question or "").strip()
+        if not ack and not q:
+            return ""
+        if not ack:
+            return q
+        if not q:
+            return ack
+        if q.lower() in ack.lower():
+            return ack
+        if ack.lower() in q.lower():
+            return q
+        punct = "." if not ack.endswith((".", "!", "?", ";", ":")) else ""
+        return f"{ack}{punct} {q}".strip()
+
+
 def _invoke_m3_tts(text: str) -> str:
     """Calls M3's `synthesize_speech(text)` in `backend/voice/tts_service.py`, with valid WAV base64 fallback."""
     if not text:
         return _generate_silent_wav_base64()
     try:
         from backend.voice import tts_service  # type: ignore
+
+        if hasattr(tts_service, "synthesize_speech_sync"):
+            res = tts_service.synthesize_speech_sync(text)
+            if res:
+                return str(res)
 
         if hasattr(tts_service, "synthesize_speech"):
             fn = tts_service.synthesize_speech
@@ -439,7 +499,7 @@ def _invoke_m3_tts(text: str) -> str:
                     import concurrent.futures
 
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        res = pool.submit(asyncio.run, res).result(timeout=8)
+                        res = pool.submit(asyncio.run, res).result(timeout=45)
                 else:
                     res = asyncio.run(res)
             if res:
@@ -503,6 +563,7 @@ async def health_check() -> Dict[str, Any]:
     }
 
 
+@app.post("/api/ingest", response_model=IngestResponse, include_in_schema=True)
 @app.post("/api/ingest-repo", response_model=IngestResponse)
 async def ingest_repo(req: IngestRepoRequest) -> IngestResponse:
     """
@@ -681,6 +742,7 @@ async def viva_turn(
     content_type = request.headers.get("content-type", "")
     parsed_code_result: Optional[RunCodeResponse] = None
     audio_bytes: Optional[bytes] = None
+    audio_mime: Optional[str] = None
 
     if "application/json" in content_type:
         body = await request.json()
@@ -689,6 +751,7 @@ async def viva_turn(
         eff_student_text = turn_req.student_text
         eff_selected_author = turn_req.selected_author
         parsed_code_result = turn_req.code_result
+        audio_mime = getattr(turn_req, "audio_mime", None) or body.get("audio_mime")
         if turn_req.audio_base64:
             raw_b64 = turn_req.audio_base64.split(",")[-1]
             try:
@@ -701,6 +764,7 @@ async def viva_turn(
         eff_selected_author = selected_author
         if audio is not None:
             audio_bytes = await audio.read()
+            audio_mime = audio.content_type
 
     if not eff_session_id or eff_session_id not in SESSIONS:
         raise HTTPException(
@@ -716,8 +780,12 @@ async def viva_turn(
         domain_identifiers = ", ".join(s.name for s in session.repo_index.symbols[:20])
 
     if (not eff_student_text or not eff_student_text.strip()) and audio_bytes:
-        transcribed = await _invoke_m3_stt(audio_bytes, domain_prompt=domain_identifiers)
-        eff_student_text = transcribed or "I implemented this function to handle the core data transformation and boundary checks."
+        transcribed = await _invoke_m3_stt(
+            audio_bytes,
+            domain_prompt=domain_identifiers,
+            mime_type=audio_mime,
+        )
+        eff_student_text = transcribed or ""
 
     try:
         response = process_turn(
@@ -769,14 +837,23 @@ async def run_code(req: RunCodeRequest) -> RunCodeResponse:
 
 
 @app.get("/api/report/{session_id}", response_model=VivaReport)
-async def get_viva_report(session_id: str) -> VivaReport:
+@app.get("/api/viva/report/{session_id}", response_model=VivaReport)
+@app.get("/api/viva/report", response_model=VivaReport)
+async def get_viva_report(session_id: Optional[str] = None) -> VivaReport:
     """
     Generates the final Fluency-Blind Competency Report (`VivaReport`) with
     weighted rubric scores, Bloom L1-L4 topic radar items, sandbox verification status,
-    and a personalized study plan.
+    a personalized study plan, and synthesized closing spoken remarks.
     """
+    eff_id = session_id
+    if not eff_id:
+        if SESSIONS:
+            eff_id = list(SESSIONS.keys())[-1]
+        else:
+            raise HTTPException(status_code=400, detail="session_id is required.")
+
     try:
-        return generate_final_report(session_id)
+        return generate_final_report(eff_id, audio_synthesizer=_invoke_m3_tts)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
