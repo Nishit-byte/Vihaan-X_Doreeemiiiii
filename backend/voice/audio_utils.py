@@ -92,7 +92,22 @@ def is_probably_silent_or_too_short(audio_bytes: bytes, fmt: str | None = None) 
     if len(raw) < 2048:
         return True
 
-    detected_fmt = fmt.lower() if fmt else detect_audio_format(raw)
+    if fmt:
+        f = fmt.lower()
+        if "wav" in f:
+            detected_fmt = "wav"
+        elif "webm" in f:
+            detected_fmt = "webm"
+        elif "ogg" in f or "opus" in f:
+            detected_fmt = "ogg"
+        elif "mp4" in f or "m4a" in f:
+            detected_fmt = "mp4"
+        elif "mp3" in f or "mpeg" in f:
+            detected_fmt = "mp3"
+        else:
+            detected_fmt = detect_audio_format(raw)
+    else:
+        detected_fmt = detect_audio_format(raw)
 
     if detected_fmt == "wav":
         try:

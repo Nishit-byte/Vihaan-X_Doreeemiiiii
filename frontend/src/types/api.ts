@@ -185,6 +185,7 @@ export interface TurnRequest {
   session_id: string
   student_text?: string
   audio_base64?: string
+  audio_mime?: string
   code_result?: RunCodeResponse
 }
 
