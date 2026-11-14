@@ -76,19 +76,6 @@ export default function TopNavbar(p: Props) {
           <button className={outlineBtn} onClick={() => fileRef.current?.click()} disabled={p.busy}>
             <FileUp className="h-4 w-4" aria-hidden /> Upload PDF
           </button>
-
-          {p.authors.length > 0 && (
-            <select
-              aria-label="Examine contributions by author"
-              value={p.author ?? ''}
-              onChange={e => p.onAuthorChange(e.target.value || null)}
-              disabled={p.busy}
-              className="rounded-md bg-void-canvas px-2.5 py-1.5 text-sm font-medium text-pale-frost ring-1 ring-inset ring-blue-steel disabled:opacity-40"
-            >
-              <option value="">All authors</option>
-              {p.authors.map(a => <option key={a} value={a}>{a}</option>)}
-            </select>
-          )}
         </div>
 
         <div className="flex items-center gap-3 pl-2">

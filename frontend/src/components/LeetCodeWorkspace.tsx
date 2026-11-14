@@ -29,6 +29,7 @@ import {
 } from 'lucide-react'
 import { runCode } from '../services/apiClient'
 import type { OAQuestion, OATestCase, RunCodeRequest, RunCodeResponse, TestCaseResult } from '../types/api'
+import { ProctorStatusPill } from '../context/ProctorContext'
 
 export interface LanguageBoilerplate {
   id: string
@@ -44,17 +45,10 @@ export const LEETCODE_LANGUAGES: LanguageBoilerplate[] = [
     name: 'C++ (g++ 20)',
     monacoLang: 'cpp',
     filename: 'main.cpp',
-    template: `#include <bits/stdc++.h>
-using namespace std;
-
-// Write your solution here
-
-int main() {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
-    
-    return 0;
-}
+    template: `class Solution {
+public:
+    // Write your solution here
+};
 `,
   },
   {
@@ -62,14 +56,9 @@ int main() {
     name: 'Python 3',
     monacoLang: 'python',
     filename: 'main.py',
-    template: `import sys
-
-def solve():
+    template: `class Solution:
     # Write your solution here
     pass
-
-if __name__ == "__main__":
-    solve()
 `,
   },
   {
@@ -77,13 +66,8 @@ if __name__ == "__main__":
     name: 'Java (OpenJDK 21)',
     monacoLang: 'java',
     filename: 'Main.java',
-    template: `import java.io.*;
-import java.util.*;
-
-public class Main {
-    public static void main(String[] args) throws Exception {
-        // Write your solution here
-    }
+    template: `class Solution {
+    // Write your solution here
 }
 `,
   },
@@ -92,16 +76,40 @@ public class Main {
     name: 'JavaScript (Node.js)',
     monacoLang: 'javascript',
     filename: 'main.js',
-    template: `const fs = require('fs');
-
-function solve() {
+    template: `/**
+ * @return {void}
+ */
+var solve = function() {
     // Write your solution here
-}
-
-solve();
+};
 `,
   },
 ]
+
+export function getQuestionStarterTemplate(q: OAQuestion, langId: string): string {
+  if (q.starter_templates && q.starter_templates[langId]) {
+    return q.starter_templates[langId]
+  }
+
+  // Derive method name from question title (camelCase)
+  const words = q.title.match(/[a-zA-Z0-9]+/g) || ['solve']
+  const methodName = words
+    .map((w, i) => (i === 0 ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+    .join('')
+
+  switch (langId) {
+    case 'cpp':
+      return `class Solution {\npublic:\n    // Write your solution here\n    void ${methodName}() {\n        \n    }\n};\n`
+    case 'python':
+      return `class Solution:\n    def ${methodName}(self):\n        # Write your solution here\n        pass\n`
+    case 'java':
+      return `class Solution {\n    public void ${methodName}() {\n        // Write your solution here\n    }\n}\n`
+    case 'javascript':
+      return `/**\n * @return {void}\n */\nvar ${methodName} = function() {\n    // Write your solution here\n};\n`
+    default:
+      return `class Solution:\n    def solve(self):\n        pass\n`
+  }
+}
 
 interface Props {
   sessionId: string
@@ -125,7 +133,7 @@ export default function LeetCodeWorkspace({
     () => LEETCODE_LANGUAGES.find(l => l.id === initialLanguage) ?? LEETCODE_LANGUAGES[0]
   )
   const langBuffers = useRef<Record<string, string>>({})
-  const [code, setCode] = useState<string>(() => selectedLang.template)
+  const [code, setCode] = useState<string>(() => getQuestionStarterTemplate(question, selectedLang.id))
 
   // Question Solved State
   const [isSolved, setIsSolved] = useState<boolean>(false)
@@ -161,7 +169,7 @@ export default function LeetCodeWorkspace({
   // Sync when question changes
   useEffect(() => {
     langBuffers.current = {}
-    setCode(selectedLang.template)
+    setCode(getQuestionStarterTemplate(question, selectedLang.id))
     setIsSolved(false)
     setShowHint(false)
     setResult(null)
@@ -200,15 +208,16 @@ export default function LeetCodeWorkspace({
     langBuffers.current[selectedLang.id] = code
 
     setSelectedLang(newLang)
-    const existingCode = langBuffers.current[newLang.id] ?? newLang.template
+    const existingCode = langBuffers.current[newLang.id] ?? getQuestionStarterTemplate(question, newLang.id)
     setCode(existingCode)
   }
 
   // Reset to empty starter template
   const handleResetCode = () => {
+    const template = getQuestionStarterTemplate(question, selectedLang.id)
     if (window.confirm(`Reset code to empty ${selectedLang.name} starter template?`)) {
-      setCode(selectedLang.template)
-      langBuffers.current[selectedLang.id] = selectedLang.template
+      setCode(template)
+      langBuffers.current[selectedLang.id] = template
     }
   }
 
@@ -233,6 +242,7 @@ export default function LeetCodeWorkspace({
       test_cases: isCustom ? [] : casesToSend,
       run_hidden: false,
       custom_input: isCustom ? customInput : undefined,
+      driver_code: question.driver_code?.[selectedLang.id],
     }
 
     try {
@@ -268,6 +278,7 @@ export default function LeetCodeWorkspace({
       language: selectedLang.id,
       test_cases: allCases,
       run_hidden: true,
+      driver_code: question.driver_code?.[selectedLang.id],
     }
 
     try {
@@ -446,8 +457,10 @@ export default function LeetCodeWorkspace({
             </div>
           </div>
 
-          {/* Right: Assessment Timer & Reset */}
+          {/* Right: Proctor Status, Assessment Timer & Reset */}
           <div className="flex items-center gap-2">
+            <ProctorStatusPill />
+
             {/* Live Ticking Assessment Timer */}
             <div
               className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-mono font-bold transition ${

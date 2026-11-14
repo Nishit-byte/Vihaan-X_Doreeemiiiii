@@ -390,10 +390,10 @@ function normalizeReport(raw: BackendVivaReport): VivaReport {
 }
 
 export function ingestRepo(github_url: string, author: string | null = null) {
-  const body = { github_url, selected_author: author }
+  const body = { github_url, selected_author: null }
   return withFallback(
     async () => normalizeIngest(await request<BackendIngestResponse>('/ingest-repo', json(body))),
-    () => mockIngestRepo(author),
+    () => mockIngestRepo(null),
   )
 }
 
@@ -436,4 +436,18 @@ export function ingestLeetCode(
   }
   // Always invoke live FastAPI endpoint for dynamic Gemini question generation per LeetCode ID
   return request<IngestLeetCodeResponse>('/ingest-leetcode', json(body))
+}
+
+export async function terminateSession(
+  session_id: string,
+  reason = 'anti_plagiarism_fullscreen_exit',
+): Promise<{ status: string; session_id: string }> {
+  try {
+    return await request<{ status: string; session_id: string }>(
+      '/viva/terminate',
+      json({ session_id, reason }),
+    )
+  } catch {
+    return { status: 'terminated', session_id }
+  }
 }
