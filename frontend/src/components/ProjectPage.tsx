@@ -31,7 +31,14 @@ export default function ProjectPage({ onBack }: Props) {
   const [report, setReport] = useState<VivaReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
-  const { startProctoredSession, endProctoredSession } = useProctor()
+  const { startProctoredSession, endProctoredSession, terminatedDueToViolation } = useProctor()
+
+  useEffect(() => {
+    if (terminatedDueToViolation) {
+      setTurn(null)
+      setPendingFirstTurn(null)
+    }
+  }, [terminatedDueToViolation])
 
   useEffect(() => subscribeDemoMode(setDemo), [])
 
