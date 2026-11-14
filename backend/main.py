@@ -445,8 +445,8 @@ async def _invoke_m3_stt(
                 res = await res
             if res:
                 return str(res)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[VIVA TURN STT ERROR] {exc}", flush=True)
     return ""
 
 
@@ -753,10 +753,19 @@ async def viva_turn(
         parsed_code_result = turn_req.code_result
         audio_mime = getattr(turn_req, "audio_mime", None) or body.get("audio_mime")
         if turn_req.audio_base64:
-            raw_b64 = turn_req.audio_base64.split(",")[-1]
+            raw_b64 = turn_req.audio_base64
+            if "," in raw_b64 and "base64" in raw_b64:
+                raw_b64 = raw_b64.split(",", 1)[1]
+            elif "," in raw_b64:
+                raw_b64 = raw_b64.split(",")[-1]
+            raw_b64 = raw_b64.strip()
+            missing_padding = len(raw_b64) % 4
+            if missing_padding:
+                raw_b64 += "=" * (4 - missing_padding)
             try:
                 audio_bytes = base64.b64decode(raw_b64)
-            except Exception:
+            except Exception as b64_err:
+                print(f"[VIVA TURN] Failed to decode audio_base64: {b64_err}", flush=True)
                 audio_bytes = None
     else:
         eff_session_id = session_id or ""
@@ -795,9 +804,17 @@ async def viva_turn(
             selected_author=eff_selected_author,
             audio_synthesizer=_invoke_m3_tts,
         )
+        print(
+            f"[VIVA TURN] audio_bytes={len(audio_bytes) if audio_bytes else 0} "
+            f"transcript={eff_student_text!r} grade={response.verdict}",
+            flush=True,
+        )
         return response
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"[VIVA TURN ERROR] {exc}", flush=True)
+        raise
 
 
 @app.post("/api/run-code", response_model=RunCodeResponse)
