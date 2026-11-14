@@ -20,15 +20,22 @@ export default function PaperWorkspace({ paper, activeNodeId, excerpt }: Props) 
   // Render diagram once per paper
   useEffect(() => {
     let cancelled = false
-    setReady(false); setError(null)
+    setReady(false)
+    setError(null)
     ;(async () => {
       try {
         const mermaid = (await import('mermaid')).default
         mermaid.initialize({
-          startOnLoad: false, theme: 'base',
+          startOnLoad: false,
+          theme: 'base',
           themeVariables: {
-            background: '#080e21', primaryColor: '#0f172b', primaryTextColor: '#e2e8f0',
-            primaryBorderColor: '#314158', lineColor: '#90a1b9', fontFamily: 'Public Sans, sans-serif', fontSize: '14px',
+            background: '#ffffff',
+            primaryColor: '#edefff',
+            primaryTextColor: '#282e3e',
+            primaryBorderColor: '#d9dde8',
+            lineColor: '#586380',
+            fontFamily: 'Inter, sans-serif',
+            fontSize: '14px',
           },
           flowchart: { curve: 'basis', padding: 12 },
         })
@@ -37,68 +44,83 @@ export default function PaperWorkspace({ paper, activeNodeId, excerpt }: Props) 
         hostRef.current.innerHTML = svg
         const map: Record<string, string> = {}
         hostRef.current.querySelectorAll('g.node').forEach(g => {
-          const id = nodeIdOf(g); if (id) map[id] = (g.textContent ?? '').trim()
+          const id = nodeIdOf(g)
+          if (id) map[id] = (g.textContent ?? '').trim()
         })
-        setLabels(map); setReady(true)
+        setLabels(map)
+        setReady(true)
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Could not render diagram')
       }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [paper.mermaid, uid])
 
   // Examiner moved to a new node: drop manual selection
-  useEffect(() => { setPicked(null) }, [activeNodeId])
+  useEffect(() => {
+    setPicked(null)
+  }, [activeNodeId])
 
   const shownId = picked ?? activeNodeId ?? null
   useEffect(() => {
     if (!ready || !hostRef.current) return
     hostRef.current.querySelectorAll('g.node').forEach(g =>
-      g.classList.toggle('vv-active', nodeIdOf(g) === shownId))
+      g.classList.toggle('vv-active', nodeIdOf(g) === shownId)
+    )
   }, [ready, shownId])
 
   const text = picked ? paper.nodes[picked] : (excerpt ?? (activeNodeId ? paper.nodes[activeNodeId] : null))
 
   return (
-    <div className="panel flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-steel-outline p-2">
-        <span className="rounded-md bg-deep-slate px-2.5 py-1.5 text-sm font-medium text-signal-white">Paper map</span>
-        <span className="ml-auto text-xs text-muted-fog">Click a stage to read its excerpt</span>
+    <div className="card flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-mist-border bg-paper-white p-3">
+        <span className="rounded-md bg-lilac-wash px-2.5 py-1 text-sm font-semibold text-iris-bolt">
+          Paper Map
+        </span>
+        <span className="ml-auto text-xs text-slate-veil">Click a stage to read its excerpt</span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto p-4">
+      <div className="min-h-0 flex-1 overflow-auto bg-paper-white p-4">
         {error ? (
           <div>
-            <p className="text-sm text-pale-frost">The diagram could not be drawn: {error}</p>
-            <pre className="mt-2 overflow-auto rounded-md bg-void-canvas p-3 font-mono text-sm text-muted-fog">{paper.mermaid}</pre>
+            <p className="text-sm text-ink-charcoal">The diagram could not be drawn: {error}</p>
+            <pre className="mt-2 overflow-auto rounded-md bg-chalk-canvas p-3 font-mono text-sm text-slate-veil">
+              {paper.mermaid}
+            </pre>
           </div>
         ) : (
           <>
-            {!ready && <p className="text-sm text-muted-fog">Drawing paper map…</p>}
+            {!ready && <p className="text-sm text-slate-veil">Drawing paper map…</p>}
             <div
               ref={hostRef}
               className="mermaid-host flex justify-center"
               onClick={e => {
-                const g = (e.target as Element).closest('g.node'); if (!g) return
-                const id = nodeIdOf(g); if (id && paper.nodes[id]) setPicked(id)
+                const g = (e.target as Element).closest('g.node')
+                if (!g) return
+                const id = nodeIdOf(g)
+                if (id && paper.nodes[id]) setPicked(id)
               }}
             />
           </>
         )}
       </div>
 
-      <div className="border-t border-steel-outline p-3">
-        <div className="panel bg-void-canvas p-3" style={{ background: 'var(--color-void-canvas)' }}>
+      <div className="border-t border-mist-border bg-paper-white p-3">
+        <div className="rounded-md border border-mist-border bg-chalk-canvas p-3">
           {text ? (
             <>
-              <div className="flex items-center gap-2 text-sm font-semibold text-pale-frost">
-                <span className="rounded-full px-2 py-0.5 text-xs text-nuxt-signal ring-1 ring-inset ring-nuxt-signal/25">{shownId}</span>
+              <div className="flex items-center gap-2 text-sm font-semibold text-ink-charcoal">
+                <span className="rounded-full bg-lilac-wash px-2 py-0.5 text-xs text-iris-bolt ring-1 ring-inset ring-iris-bolt/20">
+                  {shownId}
+                </span>
                 {shownId && labels[shownId]}
               </div>
-              <p className="mt-2 text-sm leading-6 text-muted-fog">{text}</p>
+              <p className="mt-2 text-sm leading-6 text-slate-veil">{text}</p>
             </>
           ) : (
-            <p className="text-sm text-muted-fog">The examiner will highlight a stage here and show its excerpt.</p>
+            <p className="text-sm text-fog-mist">The examiner will highlight a stage here and show its excerpt.</p>
           )}
         </div>
       </div>
