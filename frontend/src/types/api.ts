@@ -2,7 +2,7 @@
 // the other shapes are proposed and must be confirmed against schemas.py.
 
 export type Verdict = 'start' | 'strong' | 'partial' | 'weak' | 'no_answer'
-export type VivaMode = 'repo' | 'paper'
+export type VivaMode = 'repo' | 'paper' | 'dsa'
 
 export interface CodeHighlight {
   file_path: string
@@ -185,21 +185,49 @@ export interface TurnRequest {
   session_id: string
   student_text?: string
   audio_base64?: string
+  audio_mime?: string
   code_result?: RunCodeResponse
+}
+
+export interface OATestCase {
+  stdin: string
+  expected_output: string
+  is_hidden?: boolean
+}
+
+export interface TestCaseResult {
+  case_num: number
+  stdin: string
+  expected_output: string
+  actual_output: string
+  passed: boolean
+  is_hidden?: boolean
+  error?: string | null
 }
 
 export interface RunCodeRequest {
   session_id: string
-  file_path: string
-  student_code: string
-  test_code: string
+  question_id?: string
+  file_path?: string
+  student_code?: string
+  source_code?: string
+  language?: string
+  test_code?: string
+  test_cases?: OATestCase[]
+  run_hidden?: boolean
+  custom_input?: string
+  driver_code?: string
 }
 
 export interface RunCodeResponse {
   passed: boolean
+  verdict?: string
   stdout: string
   stderr: string
   runtime_ms: number
+  test_results?: TestCaseResult[]
+  total_cases?: number
+  passed_cases?: number
 }
 
 export interface VivaReport {
@@ -229,4 +257,62 @@ export interface ExaminerPanelProps {
   onTurn: (turn: TurnResponse) => void
   /** Call when user clicks Start Viva to reveal Question 1. */
   onStartViva?: () => void
+}
+
+// ============================================================================
+// LEETCODE INGESTION & ADAPTIVE OA TYPES
+// ============================================================================
+
+export interface SkillTagStat {
+  tag_name: string
+  problems_solved: number
+  tier: 'Fundamental' | 'Intermediate' | 'Advanced'
+}
+
+export interface OAExample {
+  input: string
+  output: string
+  explanation?: string | null
+}
+
+export interface OAQuestion {
+  question_id: string
+  title: string
+  difficulty: 'Easy' | 'Medium' | 'Hard'
+  topics: string[]
+  selection_reason: string
+  problem_statement: string
+  examples: OAExample[]
+  constraints: string[]
+  starter_code?: string
+  test_code?: string
+  test_cases?: OATestCase[]
+  starter_templates?: Record<string, string>
+  driver_code?: Record<string, string>
+}
+
+export interface LeetCodeProfileData {
+  username: string
+  category: 'PUBLIC_SOLVED_LIST' | 'HIDDEN_TOPIC_COUNTS_ONLY'
+  primary_language: string
+  total_solved: number
+  easy_solved: number
+  medium_solved: number
+  hard_solved: number
+  recent_ac_titles: string[]
+  skill_tags: SkillTagStat[]
+}
+
+export interface IngestLeetCodeRequest {
+  username_or_url: string
+  num_easy?: number
+  num_medium?: number
+  num_hard?: number
+}
+
+export interface IngestLeetCodeResponse {
+  session_id: string
+  profile: LeetCodeProfileData
+  oa_questions: OAQuestion[]
+  initial_turn: TurnResponse
 }

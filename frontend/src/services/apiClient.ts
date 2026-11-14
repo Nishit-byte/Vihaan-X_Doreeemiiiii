@@ -1,6 +1,9 @@
 import type {
-  BreakdownField, ClaimOrigin, DiagramProvenance, IngestRepoRequest, IngestResponse,
-  PaperBreakdown, PaperNodeMeta, RunCodeRequest, RunCodeResponse,
+  BreakdownField, ClaimOrigin, DiagramProvenance,
+  IngestLeetCodeRequest, IngestLeetCodeResponse,
+  IngestRepoRequest, IngestResponse,
+  PaperBreakdown, PaperNodeMeta,
+  RunCodeRequest, RunCodeResponse,
   TurnRequest, TurnResponse, VivaReport,
 } from '../types/api'
 import { mockIngestPdf, mockIngestRepo, mockReport, mockRun, mockTurn } from './demoData'
@@ -387,10 +390,10 @@ function normalizeReport(raw: BackendVivaReport): VivaReport {
 }
 
 export function ingestRepo(github_url: string, author: string | null = null) {
-  const body = { github_url, selected_author: author }
+  const body = { github_url, selected_author: null }
   return withFallback(
     async () => normalizeIngest(await request<BackendIngestResponse>('/ingest-repo', json(body))),
-    () => mockIngestRepo(author),
+    () => mockIngestRepo(null),
   )
 }
 
@@ -407,8 +410,9 @@ export function submitTurn(req: TurnRequest) {
   return withFallback(() => request<TurnResponse>('/viva/turn', json(req)), () => mockTurn(req))
 }
 
-export function runCode(req: RunCodeRequest) {
-  return withFallback(() => request<RunCodeResponse>('/run-code', json(req)), () => mockRun(req))
+export function runCode(req: RunCodeRequest): Promise<RunCodeResponse> {
+  // Always invoke live FastAPI sandbox verification endpoint
+  return request<RunCodeResponse>('/run-code', json(req))
 }
 
 export function fetchReport(sessionId: string) {
@@ -416,4 +420,34 @@ export function fetchReport(sessionId: string) {
     async () => normalizeReport(await request<BackendVivaReport>(`/report/${sessionId}`)),
     () => mockReport(sessionId),
   )
+}
+
+export function ingestLeetCode(
+  username_or_url: string,
+  num_easy = 1,
+  num_medium = 2,
+  num_hard = 2,
+): Promise<IngestLeetCodeResponse> {
+  const body: IngestLeetCodeRequest = {
+    username_or_url,
+    num_easy,
+    num_medium,
+    num_hard,
+  }
+  // Always invoke live FastAPI endpoint for dynamic Gemini question generation per LeetCode ID
+  return request<IngestLeetCodeResponse>('/ingest-leetcode', json(body))
+}
+
+export async function terminateSession(
+  session_id: string,
+  reason = 'anti_plagiarism_fullscreen_exit',
+): Promise<{ status: string; session_id: string }> {
+  try {
+    return await request<{ status: string; session_id: string }>(
+      '/viva/terminate',
+      json({ session_id, reason }),
+    )
+  } catch {
+    return { status: 'terminated', session_id }
+  }
 }
