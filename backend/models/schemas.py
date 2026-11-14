@@ -219,6 +219,7 @@ class TestCaseResult(BaseModel):
 
 class RunCodeRequest(BaseModel):
     session_id: str
+    question_id: Optional[str] = None
     file_path: Optional[str] = "main.py"
     student_code: Optional[str] = None
     source_code: Optional[str] = None

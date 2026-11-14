@@ -40,7 +40,7 @@ def _sanitize_cpp_code(code: str) -> str:
     """
     Sanitizes C++ source and driver code to fix common LLM formatting quirks:
     - Replaces invalid directives like `#iostream` or `#vector` with `#include <iostream>`
-    - Wraps naked headers e.g. `#include iostream` in angle brackets `<iostream>`
+    - Corrects `#include<iostream>` or `#include iostream` to `#include <iostream>`
     - Sanitizes unrecognized invalid preprocessor directives that break g++
     """
     if not code:
@@ -48,7 +48,7 @@ def _sanitize_cpp_code(code: str) -> str:
 
     valid_directives = {
         "include", "define", "ifdef", "ifndef", "endif", "if", "else", "elif",
-        "pragma", "line", "error", "warning"
+        "pragma", "line", "error", "warning", "undef"
     }
     known_headers = {
         "iostream", "vector", "string", "algorithm", "cmath", "climits", "map", "set",
@@ -60,49 +60,96 @@ def _sanitize_cpp_code(code: str) -> str:
 
     sanitized_lines = []
     for line in code.splitlines():
-        m = re.match(r"^\s*#\s*([a-zA-Z0-9_/<>\.\"]+)(.*)", line)
+        # Match standard directives: e.g. #include <iostream>, #include<vector>, #define X
+        m = re.match(r"^\s*#\s*([a-zA-Z_][a-zA-Z0-9_]*)(.*)", line)
         if m:
             directive = m.group(1).strip()
-            rest = m.group(2)
+            rest = m.group(2).strip()
             if directive in valid_directives:
                 if directive == "include":
-                    include_target = rest.strip()
-                    if include_target and not (include_target.startswith("<") or include_target.startswith('"')):
-                        line = f"#include <{include_target}>"
+                    if rest.startswith('"') and rest.endswith('"'):
+                        line = f"#include {rest}"
+                    else:
+                        header_name = rest.strip('<>" \t')
+                        if header_name:
+                            line = f"#include <{header_name}>"
+                        else:
+                            line = "// [sanitized empty include]"
             elif directive in known_headers:
                 line = f"#include <{directive}>"
-            elif directive.strip('<>"') in known_headers:
-                line = f'#include <{directive.strip("<>\"")}>'
             else:
                 line = f"// [sanitized] {line}"
+        else:
+            # Check for naked #<header>
+            m_angle = re.match(r"^\s*#\s*<([a-zA-Z0-9_/\.]+)>", line)
+            if m_angle:
+                line = f"#include <{m_angle.group(1)}>"
+            elif re.match(r"^\s*#\s*[^\s]", line):
+                # Any unrecognized line starting with # that isn't a valid directive
+                line = f"// [sanitized] {line}"
+
         sanitized_lines.append(line)
     return "\n".join(sanitized_lines)
 
 
 def _strip_solution_class_braces(code: str) -> str:
-    """Removes any class Solution { ... }; block using brace-depth matching."""
+    """Removes any class Solution { ... }; block using brace-depth matching, ignoring strings and comments."""
     if not code:
         return ""
     pattern = re.compile(r"\b(?:(?:public|private|protected)\s+)?class\s+Solution\b[^{]*\{")
-    while True:
+    max_loops = 5
+    while max_loops > 0:
+        max_loops -= 1
         match = pattern.search(code)
         if not match:
             break
         start = match.start()
         depth = 1
         pos = match.end()
-        while pos < len(code) and depth > 0:
+        n = len(code)
+        in_line_comment = False
+        in_block_comment = False
+        in_str = None
+
+        while pos < n and depth > 0:
             ch = code[pos]
-            if ch == '{':
-                depth += 1
-            elif ch == '}':
-                depth -= 1
+            if in_line_comment:
+                if ch == '\n':
+                    in_line_comment = False
+            elif in_block_comment:
+                if ch == '*' and pos + 1 < n and code[pos + 1] == '/':
+                    in_block_comment = False
+                    pos += 1
+            elif in_str:
+                if ch == '\\':
+                    pos += 1  # skip escaped character
+                elif ch == in_str:
+                    in_str = None
+            else:
+                if ch == '/' and pos + 1 < n and code[pos + 1] == '/':
+                    in_line_comment = True
+                    pos += 1
+                elif ch == '/' and pos + 1 < n and code[pos + 1] == '*':
+                    in_block_comment = True
+                    pos += 1
+                elif ch in ('"', "'"):
+                    in_str = ch
+                elif ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
             pos += 1
-        while pos < len(code) and code[pos] in (' ', '\t', ';'):
-            pos += 1
-        if pos < len(code) and code[pos] == '\n':
-            pos += 1
-        code = code[:start] + code[pos:]
+
+        if depth == 0:
+            while pos < n and code[pos] in (' ', '\t', ';'):
+                pos += 1
+            if pos < n and code[pos] == '\n':
+                pos += 1
+            code = code[:start] + code[pos:]
+        else:
+            # Unmatched braces: abort safely without truncating file
+            break
+
     return code
 
 
@@ -110,15 +157,127 @@ def _clean_driver_cpp(code: str) -> str:
     """Strips class Solution, duplicate #include and using namespace lines from driver_code."""
     if not code:
         return ""
-    code = _sanitize_cpp_code(code)
-    code = _strip_solution_class_braces(code)
+    sanitized = _sanitize_cpp_code(code)
+    stripped = _strip_solution_class_braces(sanitized)
+    
+    # If stripping somehow removed main, recover from sanitized
+    if "main(" not in stripped and "main(" in sanitized:
+        main_pos = sanitized.find("int main")
+        if main_pos == -1:
+            main_pos = sanitized.find("main(")
+        if main_pos != -1:
+            stripped = sanitized[main_pos:]
+        else:
+            stripped = sanitized
+
     lines = []
-    for line in code.splitlines():
+    for line in stripped.splitlines():
         trimmed = line.strip()
-        if trimmed.startswith("#include") or trimmed == "using namespace std;":
+        if (
+            trimmed.startswith("#include")
+            or trimmed.startswith("// [sanitized]")
+            or trimmed == "using namespace std;"
+            or re.match(r"^\s*#\s*iostream\b", trimmed)
+            or re.match(r"^\s*#\s*vector\b", trimmed)
+            or re.match(r"^\s*#\s*string\b", trimmed)
+        ):
             continue
         lines.append(line)
     return "\n".join(lines).strip()
+
+
+def _generate_fallback_cpp_main(source_code: str) -> Optional[str]:
+    """
+    Synthesizes a minimal C++ stdin/stdout driver by inspecting public methods in class Solution.
+    Handles standard single-method classes with strings, integers, and vectors.
+    """
+    if not source_code:
+        return None
+
+    # Find public method in class Solution
+    pattern = re.compile(
+        r"(?:int|bool|string|long\s+long|double|void|vector<int>|vector<string>)\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)"
+    )
+    match = pattern.search(source_code)
+    if not match:
+        return None
+
+    method_name = match.group(1)
+    if method_name in ("main", "if", "for", "while", "switch"):
+        return None
+
+    raw_params = [p.strip() for p in match.group(2).split(",") if p.strip()]
+    if not raw_params:
+        return (
+            "int main() {\n"
+            "    ios::sync_with_stdio(false);\n"
+            "    cin.tie(nullptr);\n"
+            "    Solution sol;\n"
+            f"    cout << sol.{method_name}() << \"\\n\";\n"
+            "    return 0;\n"
+            "}"
+        )
+
+    # Detect parameter types
+    if len(raw_params) == 2 and "string" in raw_params[0] and "int" in raw_params[1]:
+        return (
+            "int main() {\n"
+            "    ios::sync_with_stdio(false);\n"
+            "    cin.tie(nullptr);\n"
+            "    string s;\n"
+            "    int k;\n"
+            "    if (cin >> s >> k) {\n"
+            "        Solution sol;\n"
+            f"        cout << sol.{method_name}(s, k) << \"\\n\";\n"
+            "    }\n"
+            "    return 0;\n"
+            "}"
+        )
+    elif len(raw_params) == 2 and "vector<int>" in raw_params[0] and "int" in raw_params[1]:
+        return (
+            "int main() {\n"
+            "    ios::sync_with_stdio(false);\n"
+            "    cin.tie(nullptr);\n"
+            "    int n, k;\n"
+            "    if (cin >> n >> k) {\n"
+            "        vector<int> nums(n);\n"
+            "        for (int i = 0; i < n; i++) cin >> nums[i];\n"
+            "        Solution sol;\n"
+            f"        cout << sol.{method_name}(nums, k) << \"\\n\";\n"
+            "    }\n"
+            "    return 0;\n"
+            "}"
+        )
+    elif len(raw_params) == 1 and "vector<int>" in raw_params[0]:
+        return (
+            "int main() {\n"
+            "    ios::sync_with_stdio(false);\n"
+            "    cin.tie(nullptr);\n"
+            "    int n;\n"
+            "    if (cin >> n) {\n"
+            "        vector<int> nums(n);\n"
+            "        for (int i = 0; i < n; i++) cin >> nums[i];\n"
+            "        Solution sol;\n"
+            f"        cout << sol.{method_name}(nums) << \"\\n\";\n"
+            "    }\n"
+            "    return 0;\n"
+            "}"
+        )
+    elif len(raw_params) == 1 and "string" in raw_params[0]:
+        return (
+            "int main() {\n"
+            "    ios::sync_with_stdio(false);\n"
+            "    cin.tie(nullptr);\n"
+            "    string s;\n"
+            "    if (cin >> s) {\n"
+            "        Solution sol;\n"
+            f"        cout << sol.{method_name}(s) << \"\\n\";\n"
+            "    }\n"
+            "    return 0;\n"
+            "}"
+        )
+
+    return None
 
 
 def _clean_driver_java(code: str) -> str:
@@ -211,7 +370,25 @@ def execute_multi_language_sandbox(
             src_file = root / "main.cpp"
             sanitized_source = _sanitize_cpp_code(source_code)
             cleaned_driver = _clean_driver_cpp(driver_code) if driver_code else ""
-            if "int main(" not in sanitized_source:
+
+            has_source_main = bool(re.search(r"\b(?:int|void)\s+main\s*\(", sanitized_source))
+            if not has_source_main:
+                has_driver_main = bool(re.search(r"\b(?:int|void)\s+main\s*\(", cleaned_driver))
+                if not has_driver_main:
+                    fallback = _generate_fallback_cpp_main(sanitized_source)
+                    if fallback:
+                        cleaned_driver = fallback
+                    else:
+                        return RunCodeResponse(
+                            passed=False,
+                            verdict="Compilation Error",
+                            stdout="",
+                            stderr="Missing main() entrypoint in execution driver.",
+                            runtime_ms=int((time.perf_counter() - started) * 1000),
+                            test_results=[],
+                            total_cases=len(test_cases),
+                            passed_cases=0,
+                        )
                 effective_code = f"#include <bits/stdc++.h>\nusing namespace std;\n\n{sanitized_source}\n\n{cleaned_driver}"
             else:
                 effective_code = f"#include <bits/stdc++.h>\nusing namespace std;\n\n{sanitized_source}"

@@ -207,6 +207,7 @@ export interface TestCaseResult {
 
 export interface RunCodeRequest {
   session_id: string
+  question_id?: string
   file_path?: string
   student_code?: string
   source_code?: string

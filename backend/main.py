@@ -915,9 +915,43 @@ async def run_code(req: RunCodeRequest) -> RunCodeResponse:
     """
     session = SESSIONS.get(req.session_id)
     source = req.source_code or req.student_code or ""
+    effective_driver_code = req.driver_code
+    effective_test_cases = list(req.test_cases) if req.test_cases else []
+
+    # Backend Session Fallback Lookup:
+    # If driver_code or test_cases are missing in request, retrieve from session state
+    if session and (not effective_driver_code or not effective_test_cases):
+        q_match = None
+        oa_list = getattr(session, "oa_questions", None) or []
+        if req.question_id and oa_list:
+            for q in oa_list:
+                if getattr(q, "question_id", None) == req.question_id:
+                    q_match = q
+                    break
+        if not q_match and oa_list:
+            cur_idx = getattr(session, "current_oa_idx", 0)
+            if 0 <= cur_idx < len(oa_list):
+                q_match = oa_list[cur_idx]
+            else:
+                q_match = oa_list[0]
+
+        if q_match:
+            lang_key = (req.language or "python").lower().strip()
+            if lang_key in ("c++", "c"):
+                lang_key = "cpp"
+            elif lang_key in ("js", "node"):
+                lang_key = "javascript"
+            elif lang_key in ("openjdk",):
+                lang_key = "java"
+
+            if not effective_driver_code and getattr(q_match, "driver_code", None):
+                effective_driver_code = q_match.driver_code.get(lang_key)
+
+            if not effective_test_cases and getattr(q_match, "test_cases", None):
+                effective_test_cases = list(q_match.test_cases)
 
     if (
-        req.test_cases
+        effective_test_cases
         or req.custom_input is not None
         or (req.language and req.language.lower() in ("cpp", "c++", "java", "javascript", "js"))
     ):
@@ -926,10 +960,10 @@ async def run_code(req: RunCodeRequest) -> RunCodeResponse:
         result = execute_multi_language_sandbox(
             language=req.language or "python",
             source_code=source,
-            test_cases=req.test_cases,
+            test_cases=effective_test_cases,
             run_hidden=req.run_hidden,
             custom_input=req.custom_input,
-            driver_code=req.driver_code,
+            driver_code=effective_driver_code,
         )
     else:
         effective_test_code = req.test_code

@@ -239,6 +239,7 @@ export default function LeetCodeWorkspace({
 
     const req: RunCodeRequest = {
       session_id: sessionId,
+      question_id: question.question_id,
       file_path: selectedLang.filename,
       source_code: code,
       language: selectedLang.id,
@@ -276,6 +277,7 @@ export default function LeetCodeWorkspace({
 
     const req: RunCodeRequest = {
       session_id: sessionId,
+      question_id: question.question_id,
       file_path: selectedLang.filename,
       source_code: code,
       language: selectedLang.id,
