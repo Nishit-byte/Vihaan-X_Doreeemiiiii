@@ -39,9 +39,132 @@ export interface RepoFile {
   language: string
 }
 
+export type ClaimOrigin = 'author_claim' | 'app_interpretation'
+export type DiagramProvenance = 'reconstructed_from_paper' | 'conceptual_explanation'
+
+export interface EvidenceRef {
+  section: string
+  page: number
+  excerpt: string
+  node_id?: string | null
+  origin?: ClaimOrigin
+}
+
+export interface BreakdownField {
+  label: string
+  value: string
+  found: boolean
+  origin: ClaimOrigin
+  page?: number | null
+  section?: string | null
+  supporting_excerpt?: string | null
+  plain_language?: string | null
+}
+
+export interface MethodologyStep {
+  step_number: number
+  node_id: string
+  title: string
+  summary: string
+  plain_language?: string | null
+  origin: ClaimOrigin
+  page: number
+  section: string
+  excerpt: string
+}
+
+export interface ResultDataPoint {
+  metric_label: string
+  comparison_context?: string | null
+  baseline_label?: string | null
+  baseline_value?: number | null
+  proposed_label?: string | null
+  proposed_value?: number | null
+  value_display: string
+  numeric_value?: number | null
+  unit: string
+  baseline_or_context: string
+  page: number
+  section: string
+  excerpt: string
+}
+
+export interface GlossaryItem {
+  term: string
+  definition: string
+  origin: ClaimOrigin
+  page: number
+  excerpt: string
+}
+
+export interface PaperVivaQuestion {
+  id: string
+  category:
+    | 'basic_understanding'
+    | 'methodology_design'
+    | 'results_evidence'
+    | 'limitations_tradeoffs'
+    | 'what_if'
+  category_label: string
+  depth_level: number
+  question: string
+  why_asked: string
+  page: number
+  section: string
+  supporting_excerpt: string
+  diagram_node_id?: string | null
+}
+
+export interface PaperNodeMeta {
+  node_id: string
+  label: string
+  summary?: string | null
+  section?: string | null
+  page: number
+  excerpt: string
+}
+
+export interface PaperBreakdown {
+  extraction_status: 'ok' | 'scanned_or_empty' | 'partial'
+  extraction_notice?: string | null
+  page_count: number
+  title: string
+  title_status: 'verified' | 'uncertain'
+  authors_and_affiliations: BreakdownField
+  authors_status: 'identified' | 'uncertain' | 'not_found'
+  venue_and_year: BreakdownField
+  title_block_excerpt?: string | null
+  what_this_paper_does: BreakdownField
+  abstract_summary: BreakdownField
+  problem_and_importance: BreakdownField
+  research_objective: BreakdownField
+  background_prior_work: BreakdownField
+  proposed_method: BreakdownField
+  step_by_step_methodology: MethodologyStep[]
+  data_setup_metrics: BreakdownField
+  main_results: BreakdownField
+  results_summary_note?: string | null
+  contributions_novelty: BreakdownField
+  limitations_assumptions: BreakdownField
+  implications_future_work: BreakdownField
+  key_takeaways: BreakdownField[]
+  story_map: BreakdownField[]
+  story_map_provenance: DiagramProvenance
+  methodology_diagram_status: 'ok' | 'fallback'
+  methodology_diagram_note?: string | null
+  methodology_diagram_provenance: DiagramProvenance
+  quantitative_results: ResultDataPoint[]
+  results_chart_provenance?: DiagramProvenance | null
+  glossary: GlossaryItem[]
+  sections_index: EvidenceRef[]
+  viva_questions?: PaperVivaQuestion[]
+}
+
 export interface PaperIndex {
   mermaid: string // flowchart TD with node ids N1..N8
   nodes: Record<string, string> // node id -> excerpt
+  node_meta?: Record<string, PaperNodeMeta>
+  breakdown?: PaperBreakdown | null
 }
 
 export interface IngestRepoRequest {
@@ -62,6 +185,7 @@ export interface TurnRequest {
   session_id: string
   student_text?: string
   audio_base64?: string
+  audio_mime?: string
   code_result?: RunCodeResponse
 }
 

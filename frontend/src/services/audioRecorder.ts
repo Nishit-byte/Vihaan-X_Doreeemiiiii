@@ -429,6 +429,10 @@ export function usePushToTalkRecorder(
 
       const finalMime = recorder.mimeType || preferredMime || 'audio/webm'
       const blob = new Blob(chunks, { type: finalMime })
+      if (chunks.length === 0 || blob.size === 0) {
+        optionsRef.current.onTooShort?.()
+        return
+      }
       try {
         const base64 = await blobToBase64(blob)
         if (!isMountedRef.current) return
@@ -641,14 +645,24 @@ export function usePushToTalkRecorder(
         return
       }
 
-      if (isRecordingRef.current || recordingIntentRef.current) {
+      if (
+        isRecordingRef.current ||
+        recordingIntentRef.current ||
+        (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive')
+      ) {
         stopRecording()
       }
     }
 
     // Window loses focus while Space is held -> keyup never arrives; finish the clip
     const handleBlur = () => {
-      if (isRecordingRef.current || recordingIntentRef.current) stopRecording()
+      if (
+        isRecordingRef.current ||
+        recordingIntentRef.current ||
+        (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive')
+      ) {
+        stopRecording()
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown, { capture: true, passive: false })
@@ -664,7 +678,14 @@ export function usePushToTalkRecorder(
 
   // Disabling mid-recording discards the clip
   useEffect(() => {
-    if (options.enabled === false) cancelRecording()
+    if (
+      options.enabled === false &&
+      (isRecordingRef.current ||
+        recordingIntentRef.current ||
+        (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive'))
+    ) {
+      cancelRecording()
+    }
   }, [options.enabled, cancelRecording])
 
   return {

@@ -114,7 +114,7 @@ def to_speakable(text: str) -> str:
 
 
 def build_spoken_text(ack_text: str, question_text: str) -> str:
-    """Combine acknowledgment and question text with clean punctuation for speech."""
+    """Combine acknowledgment and question text with clean punctuation for speech without duplication."""
     ack = (ack_text or "").strip()
     question = (question_text or "").strip()
 
@@ -125,6 +125,14 @@ def build_spoken_text(ack_text: str, question_text: str) -> str:
     if not question:
         return to_speakable(ack)
 
+    # Deduplicate if question is already inside ack or ack is inside question
+    norm_ack = re.sub(r"[.!?]+$", "", ack).strip()
+    norm_q = re.sub(r"[.!?]+$", "", question).strip()
+    if norm_q and norm_q.lower() in norm_ack.lower():
+        return to_speakable(ack)
+    if norm_ack and norm_ack.lower() in norm_q.lower():
+        return to_speakable(question)
+
     # Ensure clean punctuation between acknowledgment and question
     if not ack.endswith((".", "!", "?", ";", ":")):
         ack = ack + "."
@@ -133,17 +141,29 @@ def build_spoken_text(ack_text: str, question_text: str) -> str:
     return to_speakable(combined)
 
 
+# Backward-compatible and canonical helper alias for INT-2
+_build_spoken_text = build_spoken_text
+
+
 async def _synthesize_edge_tts(text: str, voice: str, rate: str) -> bytes:
-    """Synthesize speech using Microsoft Edge TTS via websocket stream."""
-    communicate = edge_tts.Communicate(text, voice, rate=rate)
-    audio_chunks: list[bytes] = []
-    async for chunk in communicate.stream():
-        if chunk.get("type") == "audio":
-            audio_chunks.append(chunk["data"])
-    audio_bytes = b"".join(audio_chunks)
-    if not audio_bytes:
-        raise RuntimeError("edge-tts produced 0 audio bytes")
-    return audio_bytes
+    """Synthesize speech using Microsoft Edge TTS via websocket stream with retry."""
+    last_exc: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            communicate = edge_tts.Communicate(text, voice, rate=rate)
+            audio_chunks: list[bytes] = []
+            async for chunk in communicate.stream():
+                if chunk.get("type") == "audio":
+                    audio_chunks.append(chunk["data"])
+            audio_bytes = b"".join(audio_chunks)
+            if audio_bytes:
+                return audio_bytes
+            raise RuntimeError("edge-tts produced 0 audio bytes")
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                await asyncio.sleep(0.3 * (attempt + 1))
+    raise last_exc or RuntimeError("edge-tts failed after retries")
 
 
 async def _synthesize_elevenlabs(text: str, voice_id: str, api_key: str) -> bytes:
