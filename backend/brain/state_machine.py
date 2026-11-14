@@ -60,6 +60,13 @@ def clean_asr_transcript(raw_text: Optional[str]) -> str:
     cleaned = raw_text.strip()
     for pattern in ASR_FILLER_PATTERNS:
         cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+    # Strip syllable stutters: e.g. "c-cosine" or "w-what" or "th-the" -> "cosine", "what", "the"
+    cleaned = re.sub(r"\b([a-zA-Z]{1,3})-+(?=[a-zA-Z]{2,})", "", cleaned)
+    # Strip stuttered word repetitions: e.g. "in, in" or "in in" -> "in", "the the" -> "the", "we we" -> "we"
+    cleaned = re.sub(r"\b([a-zA-Z0-9_]+)(?:[,\s]+\1\b)+", r"\1", cleaned, flags=re.IGNORECASE)
+    # Clean up orphaned punctuation and normalize whitespace
+    cleaned = re.sub(r"[,\s]+([,.?!])", r"\1", cleaned)
+    cleaned = re.sub(r"^[,\s;:-]+", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
@@ -118,6 +125,50 @@ SESSIONS: Dict[str, VivaSession] = {}
 # GEMINI 2.5 FLASH JSON CLIENT (WITH OFFLINE DETERMINISTIC FALLBACK)
 # ============================================================================
 
+def _robust_json_parse(raw_text: str) -> Optional[Dict[str, Any]]:
+    """Robustly extracts and parses JSON dictionary from LLM response text,
+    handling markdown fences, leading/trailing prose, and trailing commas."""
+    if not raw_text or not raw_text.strip():
+        return None
+    s = raw_text.strip()
+
+    # 1. Strip markdown fences if present (```json ... ``` or ``` ... ```)
+    if s.startswith("```"):
+        s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+        s = re.sub(r"\s*```$", "", s)
+        s = s.strip()
+
+    # 2. Try direct json.loads
+    try:
+        val = json.loads(s)
+        if isinstance(val, dict):
+            return val
+    except Exception:
+        pass
+
+    # 3. Search for outermost JSON object { ... }
+    m = re.search(r"(\{.*\})", s, re.DOTALL)
+    if m:
+        candidate = m.group(1).strip()
+        try:
+            val = json.loads(candidate)
+            if isinstance(val, dict):
+                return val
+        except Exception:
+            pass
+
+        # 4. Clean trailing commas before closing braces/brackets
+        cleaned = re.sub(r",\s*([}\]])", r"\1", candidate)
+        try:
+            val = json.loads(cleaned)
+            if isinstance(val, dict):
+                return val
+        except Exception:
+            pass
+
+    return None
+
+
 def _call_gemini_json(system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
     """
     Calls Gemini 2.5 Flash enforcing `response_mime_type="application/json"`.
@@ -146,7 +197,9 @@ def _call_gemini_json(system_prompt: str, user_prompt: str) -> Optional[Dict[str
             ),
         )
         if response and response.text:
-            return json.loads(response.text)
+            parsed = _robust_json_parse(response.text)
+            if parsed:
+                return parsed
     except ImportError:
         pass
     except Exception:
@@ -164,7 +217,9 @@ def _call_gemini_json(system_prompt: str, user_prompt: str) -> Optional[Dict[str
         )
         response = model.generate_content(user_prompt)
         if response and response.text:
-            return json.loads(response.text)
+            parsed = _robust_json_parse(response.text)
+            if parsed:
+                return parsed
     except Exception:
         pass
 
@@ -191,42 +246,79 @@ def _evaluate_student_answer_heuristically(
     if not clean_text or len(clean_text.strip()) < 3:
         return "no_answer"
 
-    words = clean_text.lower().split()
-    if any(p in clean_text.lower() for p in ["i don't know", "not sure", "skip", "pass", "no idea"]):
+    # Genuine surrender / give-up intent (ignoring technical uses of 'pass' or 'skip')
+    surrender_patterns = [
+        r"\bi\s+(don'?t|do\s+not)\s+know\b",
+        r"\bnot\s+sure\b",
+        r"\bno\s+idea\b",
+        r"^\s*(pass|skip|i\s+pass|please\s+skip)\s*[.?!]*$",
+        r"\b(i\s+pass|please\s+skip|skip\s+this|pass\s+this)\b",
+    ]
+    if any(re.search(pat, clean_text, re.IGNORECASE) for pat in surrender_patterns):
         return "weak"
+
+    words = re.findall(r"[a-zA-Z0-9_]+", clean_text.lower())
+    if not words:
+        return "no_answer"
 
     # Extract domain keywords from current AST symbol or Paper node
     domain_terms: set[str] = set()
     if symbol:
-        domain_terms.update(
-            t.lower()
-            for t in (
-                [symbol.name]
-                + symbol.args
-                + symbol.calls
-                + symbol.constants
-                + re.findall(r"[a-zA-Z_]{4,}", symbol.docstring or "")
-            )
+        raw_items = (
+            [symbol.name]
+            + symbol.args
+            + symbol.calls
+            + symbol.constants
+            + re.findall(r"[a-zA-Z_]{3,}", symbol.docstring or "")
         )
+        for item in raw_items:
+            lower = item.lower()
+            domain_terms.add(lower)
+            for sub in re.split(r"[._\s]+", lower):
+                if len(sub) >= 3:
+                    domain_terms.add(sub)
+                    if sub == "vec":
+                        domain_terms.add("vector")
+                        domain_terms.add("vectors")
+                    elif sub == "doc":
+                        domain_terms.add("document")
     if node:
         domain_terms.update(
-            t.lower() for t in re.findall(r"[a-zA-Z]{4,}", f"{node.label} {node.excerpt}")
+            t.lower() for t in re.findall(r"[a-zA-Z]{3,}", f"{node.label} {node.excerpt}")
         )
 
     technical_indicators = {
         "complexity", "time", "space", "memory", "loop", "hash", "dict", "list",
         "async", "await", "cache", "index", "tree", "node", "edge", "boundary",
         "null", "none", "empty", "zero", "exception", "error", "return", "function",
-        "parameter", "complexity", "latency", "throughput", "threshold", "vector",
-        "matrix", "gradient", "attention", "layer", "loss", "normalization", "token",
+        "parameter", "parameters", "latency", "throughput", "threshold", "vector",
+        "vectors", "matrix", "matrices", "gradient", "attention", "layer", "loss",
+        "normalization", "token", "tokens", "dot", "product", "norm", "norms", "l2",
+        "linear", "constant", "quadratic", "logarithmic", "tradeoff", "trade-off",
+        "tradeoffs", "bottleneck", "concurrency", "concurrent", "dimension",
+        "dimensions", "scale", "scaling", "iterate", "iteration", "iterating",
+        "generator", "generators", "auxiliary", "magnitude", "magnitudes",
+        "divide", "division", "precision", "floor", "rerank", "cosine", "similarity",
+        "similarity_floor", "dot_product", "l2_norm",
     }
 
     matched_domain = sum(1 for w in set(words) if w in domain_terms)
     matched_tech = sum(1 for w in set(words) if w in technical_indicators)
 
-    if len(words) >= 10 and (matched_domain >= 1 or matched_tech >= 2):
+    # Multi-word technical concept bonuses in full text
+    multi_word_concepts = [
+        "dot product", "cosine similarity", "time complexity", "space complexity",
+        "l2 norm", "auxiliary memory", "auxiliary space", "in place", "in-place",
+        "linear time", "constant space", "worst case", "worst-case", "single pass",
+        "similarity floor", "zero division", "floating point", "vector dimension"
+    ]
+    lower_text = clean_text.lower()
+    matched_phrases = sum(1 for phrase in multi_word_concepts if phrase in lower_text)
+    effective_tech = matched_tech + (matched_phrases * 2)
+
+    if len(words) >= 10 and (matched_domain >= 1 or effective_tech >= 2):
         return "strong"
-    if len(words) >= 5 and (matched_domain >= 1 or matched_tech >= 1):
+    if len(words) >= 5 and (matched_domain >= 1 or effective_tech >= 1):
         return "partial"
     if len(words) >= 14:
         return "partial"
@@ -238,33 +330,198 @@ def _build_coding_challenge_for_symbol(
     session: VivaSession,
 ) -> CodingChallenge:
     """Generates an L4 mutation/edge-case CodingChallenge grounded in the target AST symbol."""
-    llm_payload = _call_gemini_json(
-        CHALLENGE_GEN_PROMPT,
-        json.dumps(
-            {
-                "repo_name": session.title,
-                "symbol": symbol.model_dump(),
-            },
-            indent=2,
-        ),
-    )
-    if llm_payload and all(
-        k in llm_payload for k in ("description", "target_file", "starter_code", "test_code")
-    ):
-        return CodingChallenge(
-            description=str(llm_payload["description"]),
-            target_file=str(llm_payload["target_file"]),
-            starter_code=str(llm_payload["starter_code"]),
-            test_code=str(llm_payload["test_code"]),
-        )
-
-    # Deterministic AST-grounded challenge fallback
     fn_name = symbol.name
     args_list = symbol.args if symbol.args else ["items", "threshold"]
-    clean_args = [a for a in args_list if a != "self"] or ["data"]
+    clean_args = [a for a in args_list if a not in ("self", "cls") and not a.startswith("*")] or ["data"]
     sig_args = ", ".join(clean_args)
     first_arg = clean_args[0]
 
+    # 1. Inspect code_snippet annotations if present
+    annots: Dict[str, str] = {}
+    snippet = symbol.code_snippet or ""
+    if snippet:
+        try:
+            import ast
+            import textwrap
+            tree = ast.parse(textwrap.dedent(snippet))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    all_arg_nodes = (
+                        list(node.args.posonlyargs)
+                        + list(node.args.args)
+                        + list(node.args.kwonlyargs)
+                    )
+                    for a_node in all_arg_nodes:
+                        if a_node.annotation:
+                            annots[a_node.arg] = ast.unparse(a_node.annotation)
+                    break
+        except Exception:
+            pass
+        if not annots:
+            for match in re.finditer(r"([A-Za-z_]\w*)\s*:\s*([^,=\)\n]+)", snippet):
+                annots[match.group(1)] = match.group(2).strip()
+
+    fn_lower = fn_name.lower()
+    path_lower = (symbol.file_path or "").lower()
+    doc_lower = (symbol.docstring or "").lower()
+    is_vector_context = (
+        any(k in fn_lower for k in ("cosine", "simil", "rerank", "vector", "dot", "norm", "dist", "embed"))
+        or any(k in path_lower for k in ("scorer", "retrieval", "vector", "embedding", "similarity"))
+        or any(k in doc_lower for k in ("vector", "cosine", "similarity", "dot"))
+    )
+
+    vector_names = {
+        "query_vec", "doc_vec", "vec", "embedding", "embeddings",
+        "vector", "vectors", "query_vector", "doc_vector",
+        "vec1", "vec2", "v1", "v2", "target_vec", "candidate_vec",
+    }
+
+    def _is_vec(arg_name: str) -> bool:
+        name = arg_name.lower().strip()
+        annot = annots.get(arg_name, "").lower().strip()
+        if any(k in annot for k in ("list[float]", "optional[list[float]]", "vector", "embedding", "sequence[float]")):
+            return True
+        if name in vector_names:
+            return True
+        if name.endswith(("_vec", "_vector", "_embedding", "_vecs", "_vectors", "_embeddings")):
+            return True
+        if name.startswith(("vec_", "vector_")):
+            return True
+        if "vec" in name or "embedding" in name:
+            return True
+        if is_vector_context and name in {"a", "b", "u", "v", "x", "y", "query", "doc"}:
+            return True
+        return False
+
+    vector_args = [a for a in clean_args if _is_vec(a)]
+    is_vector_func = bool(vector_args) or (is_vector_context and any(a in {"a", "b", "x", "y"} for a in clean_args))
+
+    if not is_vector_func:
+        llm_payload = _call_gemini_json(
+            CHALLENGE_GEN_PROMPT,
+            json.dumps(
+                {
+                    "repo_name": session.title,
+                    "symbol": symbol.model_dump(),
+                },
+                indent=2,
+            ),
+        )
+        if llm_payload and all(
+            k in llm_payload for k in ("description", "target_file", "starter_code", "test_code")
+        ):
+            return CodingChallenge(
+                description=str(llm_payload["description"]),
+                target_file=str(llm_payload["target_file"]),
+                starter_code=str(llm_payload["starter_code"]),
+                test_code=str(llm_payload["test_code"]),
+            )
+
+    if is_vector_func:
+        v_args = vector_args if vector_args else [a for a in clean_args if a in {"a", "b", "x", "y"}][:2]
+        if not v_args:
+            v_args = clean_args[:2]
+
+        v0_name = v_args[0]
+        v1_name = v_args[1] if len(v_args) > 1 else None
+
+        # Standard call arguments
+        std_call_items = []
+        vec_idx = 0
+        for a in clean_args:
+            if a == v0_name or (v1_name and a == v1_name) or a in v_args:
+                if vec_idx == 0:
+                    std_call_items.append("[0.6, 0.8]")
+                elif vec_idx == 1:
+                    std_call_items.append("[0.8, 0.6]")
+                else:
+                    std_call_items.append("[0.6, 0.8]")
+                vec_idx += 1
+            else:
+                std_call_items.append("0.0")
+        std_args_str = ", ".join(std_call_items)
+
+        def _build_boundary_call(overrides: Dict[str, str]) -> str:
+            items = []
+            cur_v = 0
+            for a in clean_args:
+                if a in overrides:
+                    items.append(overrides[a])
+                    if a in v_args:
+                        cur_v += 1
+                elif a in v_args:
+                    if cur_v == 0:
+                        items.append("[0.6, 0.8]")
+                    elif cur_v == 1:
+                        items.append("[0.8, 0.6]")
+                    else:
+                        items.append("[0.6, 0.8]")
+                    cur_v += 1
+                else:
+                    items.append("0.0")
+            return f"{fn_name}({', '.join(items)})"
+
+        boundary_assertions = []
+        if v1_name:
+            boundary_assertions.extend([
+                f"assert {_build_boundary_call({v0_name: '[]'})} == 0.0",
+                f"assert {_build_boundary_call({v0_name: 'None'})} == 0.0",
+                f"assert {_build_boundary_call({v0_name: '[0.0, 0.0]'})} == 0.0",
+                f"assert {_build_boundary_call({v1_name: '[]'})} == 0.0",
+                f"assert {_build_boundary_call({v1_name: 'None'})} == 0.0",
+                f"assert {_build_boundary_call({v1_name: '[0.0, 0.0]'})} == 0.0",
+                f"assert {_build_boundary_call({v0_name: '[]', v1_name: '[]'})} == 0.0",
+                f"assert {_build_boundary_call({v0_name: 'None', v1_name: 'None'})} == 0.0",
+                f"assert {_build_boundary_call({v0_name: '[0.0, 0.0]', v1_name: '[0.0, 0.0]'})} == 0.0",
+            ])
+        else:
+            boundary_assertions.extend([
+                f"assert {_build_boundary_call({v0_name: '[]'})} == 0.0",
+                f"assert {_build_boundary_call({v0_name: 'None'})} == 0.0",
+                f"assert {_build_boundary_call({v0_name: '[0.0, 0.0]'})} == 0.0",
+            ])
+
+        boundary_body = "\n    ".join(boundary_assertions)
+
+        test_code = (
+            f"import pytest\n"
+            f"from student_solution import {fn_name}\n\n"
+            f"def test_{fn_name}_standard_input():\n"
+            f"    result = {fn_name}({std_args_str})\n"
+            f"    assert result == 0.96\n\n"
+            f"def test_{fn_name}_empty_boundary_edge_case():\n"
+            f"    # L4 Mutation check: empty, None, or zero-norm vector inputs should return 0.0 safely without raising ZeroDivisionError or TypeError\n"
+            f"    {boundary_body}\n"
+        )
+
+        starter_code = symbol.code_snippet or (
+            f"import math\n\n"
+            f"def {fn_name}({sig_args}):\n"
+            f"    \"\"\"L4 Sandbox Verification Target from {symbol.file_path} (Lines {symbol.line_start}-{symbol.line_end}).\n"
+            f"    BUG: Raises ZeroDivisionError or TypeError when vectors are empty, None, or zero-norm.\n"
+            f"    Fix the edge-case handling below so all pytest checks pass.\n"
+            f"    \"\"\"\n"
+            f"    # Planted boundary bug: no guard for empty / None / zero-norm vectors\n"
+            f"    norm_a = math.sqrt(sum(x * x for x in {v0_name}))\n"
+            f"    norm_b = math.sqrt(sum(x * x for x in {v1_name or v0_name}))\n"
+            f"    denom = norm_a * norm_b\n"
+            f"    dot = sum(x * y for x, y in zip({v0_name}, {v1_name or v0_name}))\n"
+            f"    return round(dot / denom, 4)\n"
+        )
+
+        description = (
+            f"Level 4 Live Verification in `{symbol.file_path}` (lines {symbol.line_start}-{symbol.line_end}): "
+            f"Fix `{fn_name}()` so that empty, `None`, or zero-norm (`[0.0, 0.0]`) vector inputs return `0.0` safely without raising `ZeroDivisionError` or `TypeError`."
+        )
+
+        return CodingChallenge(
+            description=description,
+            target_file=symbol.file_path,
+            starter_code=starter_code,
+            test_code=test_code,
+        )
+
+    # Deterministic AST-grounded challenge fallback
     starter_code = symbol.code_snippet or (
         f"def {fn_name}({sig_args}):\n"
         f"    \"\"\"L4 Sandbox Verification Target from {symbol.file_path} (Lines {symbol.line_start}-{symbol.line_end}).\n"
@@ -682,7 +939,12 @@ class SessionManager:
         if llm_out and "question_text" in llm_out:
             llm_verdict = llm_out.get("verdict")
             if not is_initial_turn and llm_verdict in ("strong", "partial", "weak", "no_answer"):
-                verdict = llm_verdict  # type: ignore
+                # Fluency-blind protection: If deterministic heuristic verified strong technical substance,
+                # do not downgrade to weak/no_answer due to LLM ASR/fluency bias
+                if verdict == "strong" and llm_verdict in ("weak", "no_answer"):
+                    pass
+                else:
+                    verdict = llm_verdict  # type: ignore
                 if verdict == "strong":
                     next_depth = min(4, session.current_depth + 1)
 
@@ -721,10 +983,30 @@ class SessionManager:
 
         # 4. Check session completion
         turn_number = len(session.turns) + 1
-        if turn_number >= session.max_turns:
+        is_closing = False
+        if code_result is not None and code_result.passed:
+            is_closing = True
+            session.done = True
+        elif turn_number >= session.max_turns:
+            is_closing = True
             session.done = True
 
-        spoken_script = f"{ack_text} {question_text}".strip()
+        if is_closing:
+            if code_result is not None and code_result.passed:
+                ack_text = f"Excellent work! Your live bug fix in {active_symbol.file_path} passed all pytest verification tests in {code_result.runtime_ms}ms."
+            else:
+                # Keep the real feedback on the final answer; append a neutral closing line
+                sep = "" if ack_text.rstrip().endswith((".", "!", "?")) else "."
+                ack_text = f"{ack_text.rstrip()}{sep} Thank you for completing the technical viva for {session.title}."
+            question_text = "That concludes your examination across all cognitive levels. Click 'View Full Report' to review your competency scores, topic depth radar, and personalized study plan."
+            topic = "Viva Complete"
+            action = "ConcludeViva"
+
+        try:
+            from backend.voice.tts_service import build_spoken_text
+            spoken_script = build_spoken_text(ack_text, question_text)
+        except Exception:
+            spoken_script = f"{ack_text} {question_text}".strip()
         audio_b64 = audio_synthesizer(spoken_script) if audio_synthesizer else ""
 
         record = TurnRecord(
@@ -820,7 +1102,12 @@ class SessionManager:
         if llm_out and "question_text" in llm_out:
             llm_verdict = llm_out.get("verdict")
             if not is_initial_turn and llm_verdict in ("strong", "partial", "weak", "no_answer"):
-                verdict = llm_verdict  # type: ignore
+                # Fluency-blind protection: If deterministic heuristic verified strong technical substance,
+                # do not downgrade to weak/no_answer due to LLM ASR/fluency bias
+                if verdict == "strong" and llm_verdict in ("weak", "no_answer"):
+                    pass
+                else:
+                    verdict = llm_verdict  # type: ignore
                 if verdict == "strong":
                     next_depth = min(4, session.current_depth + 1)
 
@@ -852,8 +1139,18 @@ class SessionManager:
         turn_number = len(session.turns) + 1
         if turn_number >= session.max_turns:
             session.done = True
+            # Keep the real feedback on the final answer; append a neutral closing line
+            sep = "" if ack_text.rstrip().endswith((".", "!", "?")) else "."
+            ack_text = f"{ack_text.rstrip()}{sep} Thank you for completing the paper viva for {session.title}."
+            question_text = "That concludes your paper viva examination. Click 'View Full Report' to review your competency scores, topic depth radar, and personalized study plan."
+            topic = "Viva Complete"
+            action = "ConcludeViva"
 
-        spoken_script = f"{ack_text} {question_text}".strip()
+        try:
+            from backend.voice.tts_service import build_spoken_text
+            spoken_script = build_spoken_text(ack_text, question_text)
+        except Exception:
+            spoken_script = f"{ack_text} {question_text}".strip()
         audio_b64 = audio_synthesizer(spoken_script) if audio_synthesizer else ""
 
         record = TurnRecord(

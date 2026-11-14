@@ -18,7 +18,7 @@ Rubric Weights:
 from __future__ import annotations
 
 import json
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 from backend.brain.prompts import FLUENCY_BLIND_GRADER_PROMPT
 from backend.brain.state_machine import (
@@ -247,7 +247,10 @@ def _aggregate_deterministic_metrics(session: VivaSession) -> VivaReport:
     )
 
 
-def generate_final_report(session_id: str) -> VivaReport:
+def generate_final_report(
+    session_id: str,
+    audio_synthesizer: Optional[Callable[[str], str]] = None,
+) -> VivaReport:
     """
     Canonical entrypoint for `GET /api/report/{id}`.
     Aggregates turn verdicts, sandbox test results, and cleaned transcripts into a VivaReport.
@@ -257,4 +260,16 @@ def generate_final_report(session_id: str) -> VivaReport:
 
     session = SESSIONS[session_id]
     session.done = True
-    return _aggregate_deterministic_metrics(session)
+    report = _aggregate_deterministic_metrics(session)
+
+    closing_text = (
+        f"Your technical viva for {session.title} is complete with an overall score of {round(report.overall_score)} out of 100. "
+        "Your rubric breakdown and topic depth radar are now available in your final report."
+    )
+    report.closing_remark = closing_text
+    if audio_synthesizer:
+        try:
+            report.audio_base64 = audio_synthesizer(closing_text)
+        except Exception:
+            report.audio_base64 = ""
+    return report
