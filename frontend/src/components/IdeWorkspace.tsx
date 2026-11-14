@@ -1,18 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import '../monacoSetup'
-import { Check, ChevronDown, ChevronRight, FileCode2, Loader2, Play, X } from 'lucide-react'
-import { runCode } from '../services/apiClient'
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  FileCode2,
+} from 'lucide-react'
 import type { CodeHighlight, CodingChallenge, RepoFile, RunCodeResponse } from '../types/api'
 
 interface Props {
-  sessionId: string
+  sessionId?: string
   files: RepoFile[]
   highlight: CodeHighlight | null | undefined
-  /** Latest challenge from TurnResponse.coding_challenge (repo L4 or DSA question) */
-  incomingChallenge: CodingChallenge | null | undefined
-  onRunResult: (res: RunCodeResponse) => void
+  incomingChallenge?: CodingChallenge | null | undefined
+  onRunResult?: (res: RunCodeResponse) => void
   emptyHint?: string
+  initialLanguage?: string
 }
 
 interface TreeNode {
@@ -35,17 +39,6 @@ function buildTree(paths: string[]): TreeNode {
   }
   return root
 }
-
-const LANG: Record<string, string> = {
-  py: 'python',
-  ts: 'typescript',
-  tsx: 'typescript',
-  js: 'javascript',
-  jsx: 'javascript',
-  md: 'markdown',
-  json: 'json',
-}
-const langOf = (f: RepoFile) => f.language || LANG[f.path.split('.').pop() ?? ''] || 'plaintext'
 
 function Tree({
   node,
@@ -107,12 +100,55 @@ function Tree({
   )
 }
 
+function getMonacoLanguage(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase() || ''
+  switch (ext) {
+    case 'py':
+      return 'python'
+    case 'ts':
+    case 'tsx':
+      return 'typescript'
+    case 'js':
+    case 'jsx':
+      return 'javascript'
+    case 'cpp':
+    case 'cc':
+    case 'cxx':
+    case 'hpp':
+    case 'h':
+    case 'c':
+      return 'cpp'
+    case 'java':
+      return 'java'
+    case 'md':
+      return 'markdown'
+    case 'json':
+      return 'json'
+    case 'html':
+      return 'html'
+    case 'css':
+      return 'css'
+    case 'yaml':
+    case 'yml':
+      return 'yaml'
+    case 'sh':
+    case 'bash':
+      return 'shell'
+    case 'rs':
+      return 'rust'
+    case 'go':
+      return 'go'
+    case 'sql':
+      return 'sql'
+    default:
+      return 'plaintext'
+  }
+}
+
 export default function IdeWorkspace({
-  sessionId,
   files: initial,
   highlight,
   incomingChallenge,
-  onRunResult,
   emptyHint,
 }: Props) {
   const [files, setFiles] = useState(initial)
@@ -125,10 +161,8 @@ export default function IdeWorkspace({
   )
   const [mounted, setMounted] = useState(false)
   const [challenge, setChallenge] = useState<CodingChallenge | null>(null)
-  const [solved, setSolved] = useState(false)
   const [showBrief, setShowBrief] = useState(true)
-  const [running, setRunning] = useState(false)
-  const [result, setResult] = useState<RunCodeResponse | null>(null)
+
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null)
   const monacoRef = useRef<Parameters<OnMount>[1] | null>(null)
   const decoRef = useRef<{ clear: () => void } | null>(null)
@@ -136,7 +170,8 @@ export default function IdeWorkspace({
 
   const tree = useMemo(() => buildTree(files.map(f => f.path)), [files])
   const file = files.find(f => f.path === active)
-  const editable = !!challenge && !solved && challenge.target_file === active
+  const activeLang = file ? getMonacoLanguage(file.path) : 'plaintext'
+  const editable = !!challenge && challenge.target_file === active
 
   const onMount: OnMount = (editor, monaco) => {
     editorRef.current = editor
@@ -178,9 +213,7 @@ export default function IdeWorkspace({
     challengeKey.current = key
 
     setChallenge(incomingChallenge)
-    setSolved(false)
     setShowBrief(true)
-    setResult(null)
 
     setFiles(prev => {
       const exists = prev.some(f => f.path === incomingChallenge.target_file)
@@ -190,7 +223,7 @@ export default function IdeWorkspace({
         {
           path: incomingChallenge.target_file,
           content: incomingChallenge.starter_code,
-          language: 'python',
+          language: getMonacoLanguage(incomingChallenge.target_file),
         },
       ]
     })
@@ -208,65 +241,49 @@ export default function IdeWorkspace({
       return n
     })
 
-  const run = async () => {
-    if (!challenge) return
-    setRunning(true)
-    setResult(null)
-    const code = buffers[challenge.target_file] ?? file?.content ?? ''
-    try {
-      const res = await runCode({
-        session_id: sessionId,
-        file_path: challenge.target_file,
-        student_code: code,
-        test_code: challenge.test_code,
-      })
-      setResult(res)
-      if (res.passed) setSolved(true)
-      onRunResult(res)
-    } catch (e) {
-      const errRes: RunCodeResponse = {
-        passed: false,
-        stdout: '',
-        stderr: e instanceof Error ? e.message : 'Execution failed',
-        runtime_ms: 0,
-      }
-      setResult(errRes)
-      onRunResult(errRes)
-    } finally {
-      setRunning(false)
-    }
-  }
-
   return (
-    <div className="card flex h-full min-h-0 flex-col overflow-hidden bg-paper-white">
-      {/* Tab bar */}
-      <div className="flex items-center gap-2 border-b border-mist-border bg-paper-white p-2.5">
-        {file ? (
-          <span className="flex items-center gap-2 rounded-md bg-lilac-wash px-2.5 py-1 text-sm font-semibold text-iris-bolt">
-            <FileCode2 className="h-4 w-4" aria-hidden />
-            {file.path}
-            {editable && <span className="text-xs font-normal text-slate-veil">(editable)</span>}
+    <div className="card flex h-full min-h-0 flex-col overflow-hidden bg-paper-white shadow-card">
+      {/* ── Top Bar: Active File Badge & Detected Language Badge Only (No language select dropdown, no timer) ── */}
+      <div className="flex items-center justify-between border-b border-mist-border bg-paper-white px-3 py-2.5">
+        <div className="flex items-center gap-2 min-w-0">
+          {file ? (
+            <span className="flex items-center gap-1.5 rounded-md bg-lilac-wash px-2.5 py-1 text-xs font-semibold text-iris-bolt truncate">
+              <FileCode2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span className="truncate">{file.path}</span>
+            </span>
+          ) : (
+            <span className="text-xs text-fog-mist">No file open</span>
+          )}
+
+          {file && (
+            <span className="rounded bg-chalk-canvas border border-mist-border px-2 py-0.5 text-[11px] font-mono font-medium text-slate-veil uppercase">
+              {activeLang}
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-medium text-slate-veil">
+            {editable ? 'Editable (Challenge Mode)' : 'Read-only view'}
           </span>
-        ) : (
-          <span className="text-sm text-fog-mist">No file open</span>
-        )}
-        <span className="ml-auto text-xs text-slate-veil">{editable ? 'Live code challenge active' : 'Read-only view'}</span>
+        </div>
       </div>
 
+      {/* ── Main View: Collapsible File Tree + Monaco Code Viewer ── */}
       <div className="flex min-h-0 flex-1">
         {/* File tree */}
-        <nav aria-label="Files" className="w-56 shrink-0 overflow-auto border-r border-mist-border bg-paper-white p-2">
+        <nav aria-label="Repository files" className="w-56 shrink-0 overflow-auto border-r border-mist-border bg-paper-white p-2">
           {files.length === 0 ? (
-            <p className="p-2 text-sm text-fog-mist">No files in workspace.</p>
+            <p className="p-2 text-sm text-fog-mist">No files in repository.</p>
           ) : (
             <Tree node={tree} depth={0} active={active} open={open} toggle={toggle} select={setActive} />
           )}
         </nav>
 
-        {/* Editor + challenge area */}
+        {/* Editor + AST Highlight / Challenge Area */}
         <div className="flex min-w-0 flex-1 flex-col">
           {challenge && (
-            <section aria-label="Coding challenge" className="shrink-0 border-b border-mist-border bg-lilac-wash/50 p-3">
+            <section aria-label="Coding challenge" className="shrink-0 border-b border-mist-border bg-lilac-wash/40 p-3">
               <button
                 onClick={() => setShowBrief(v => !v)}
                 aria-expanded={showBrief}
@@ -274,21 +291,16 @@ export default function IdeWorkspace({
               >
                 {showBrief ? <ChevronDown className="h-4 w-4" aria-hidden /> : <ChevronRight className="h-4 w-4" aria-hidden />}
                 Coding Challenge
-                <span className="rounded bg-paper-white px-2 py-0.5 font-mono text-xs font-normal text-slate-veil border border-mist-border">
+                <span className="rounded border border-mist-border bg-paper-white px-2 py-0.5 font-mono text-xs font-normal text-slate-veil">
                   {challenge.target_file}
                 </span>
-                {solved && (
-                  <span className="ml-auto flex items-center gap-1 text-xs font-semibold text-green-600">
-                    <Check className="h-3.5 w-3.5" aria-hidden /> Verified
-                  </span>
-                )}
               </button>
               {showBrief && (
-                <div className="mt-2 max-h-44 overflow-auto">
-                  <p className="text-sm leading-6 text-slate-veil">{challenge.description}</p>
+                <div className="mt-2 max-h-40 overflow-auto">
+                  <p className="text-sm leading-6 text-slate-veil whitespace-pre-wrap">{challenge.description}</p>
                   <details className="mt-2">
                     <summary className="cursor-pointer text-xs font-semibold text-iris-bolt hover:underline">
-                      View test cases
+                      View Pytest Suite
                     </summary>
                     <pre className="mt-2 overflow-auto rounded-md border border-mist-border bg-paper-white p-3 font-mono text-xs leading-5 text-ink-charcoal">
                       {challenge.test_code}
@@ -299,13 +311,14 @@ export default function IdeWorkspace({
             </section>
           )}
 
+          {/* Monaco Code Viewer */}
           <div className="min-h-0 flex-1 bg-paper-white">
             {file ? (
               <Editor
                 height="100%"
                 theme="vivavoce"
                 path={file.path}
-                language={langOf(file)}
+                language={activeLang}
                 value={buffers[file.path] ?? file.content}
                 onChange={v => setBuffers(b => ({ ...b, [file.path]: v ?? '' }))}
                 onMount={onMount}
@@ -327,53 +340,6 @@ export default function IdeWorkspace({
               </div>
             )}
           </div>
-        </div>
-      </div>
-
-      {/* Run bar + console */}
-      <div className="border-t border-mist-border bg-paper-white">
-        <div className="flex items-center gap-3 p-3">
-          <p className="min-w-0 flex-1 truncate text-sm text-slate-veil">
-            {!challenge
-              ? 'Run & Verify unlocks when the examiner sets a coding challenge.'
-              : solved
-              ? 'Challenge verified! Answer the examiner to continue.'
-              : 'Edit your code, then click Run & Verify.'}
-          </p>
-          <button
-            onClick={run}
-            disabled={!challenge || running || solved}
-            className="btn-primary"
-            style={{ padding: '8px 20px', fontSize: 14 }}
-          >
-            {running ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Play className="h-4 w-4" aria-hidden />}
-            Run &amp; Verify
-          </button>
-        </div>
-        <div
-          role="log"
-          aria-live="polite"
-          className="h-32 overflow-auto border-t border-mist-border bg-chalk-canvas p-3 font-mono text-sm leading-6"
-        >
-          {!result && !running && <span className="text-fog-mist">Test output will appear here.</span>}
-          {running && <span className="text-slate-veil">Running test suite…</span>}
-          {result && !running && (
-            <>
-              <div className="mb-1 flex items-center gap-2 font-sans font-semibold text-ink-charcoal">
-                {result.passed ? (
-                  <Check className="h-4 w-4 text-green-600" aria-hidden />
-                ) : (
-                  <X className="h-4 w-4 text-red-600" aria-hidden />
-                )}
-                <span className={result.passed ? 'text-green-700' : 'text-red-700'}>
-                  {result.passed ? 'All tests passed' : 'Tests failed'}
-                </span>
-                <span className="font-normal text-slate-veil text-xs">{result.runtime_ms} ms</span>
-              </div>
-              {result.stdout && <pre className="whitespace-pre-wrap text-ink-charcoal">{result.stdout}</pre>}
-              {result.stderr && <pre className="whitespace-pre-wrap text-red-600">{result.stderr}</pre>}
-            </>
-          )}
         </div>
       </div>
     </div>
