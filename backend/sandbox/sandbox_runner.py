@@ -36,6 +36,49 @@ from backend.models.schemas import (
 )
 
 
+def _sanitize_cpp_code(code: str) -> str:
+    """
+    Sanitizes C++ source and driver code to fix common LLM formatting quirks:
+    - Replaces invalid directives like `#iostream` or `#vector` with `#include <iostream>`
+    - Wraps naked headers e.g. `#include iostream` in angle brackets `<iostream>`
+    - Sanitizes unrecognized invalid preprocessor directives that break g++
+    """
+    if not code:
+        return ""
+
+    valid_directives = {
+        "include", "define", "ifdef", "ifndef", "endif", "if", "else", "elif",
+        "pragma", "line", "error", "warning"
+    }
+    known_headers = {
+        "iostream", "vector", "string", "algorithm", "cmath", "climits", "map", "set",
+        "queue", "deque", "stack", "sstream", "iomanip", "bits/stdc++.h", "cstdio",
+        "cstring", "cstdlib", "cassert", "numeric", "functional", "tuple", "utility",
+        "chrono", "random", "unordered_map", "unordered_set", "list", "forward_list",
+        "bitset", "regex", "fstream", "cctype"
+    }
+
+    sanitized_lines = []
+    for line in code.splitlines():
+        m = re.match(r"^\s*#\s*([a-zA-Z0-9_/<>\.\"]+)(.*)", line)
+        if m:
+            directive = m.group(1).strip()
+            rest = m.group(2)
+            if directive in valid_directives:
+                if directive == "include":
+                    include_target = rest.strip()
+                    if include_target and not (include_target.startswith("<") or include_target.startswith('"')):
+                        line = f"#include <{include_target}>"
+            elif directive in known_headers:
+                line = f"#include <{directive}>"
+            elif directive.strip('<>"') in known_headers:
+                line = f'#include <{directive.strip("<>\"")}>'
+            else:
+                line = f"// [sanitized] {line}"
+        sanitized_lines.append(line)
+    return "\n".join(sanitized_lines)
+
+
 def _minimal_environment() -> dict[str, str]:
     allowed_keys = ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP")
     env = {k: os.environ[k] for k in allowed_keys if k in os.environ}
@@ -70,11 +113,13 @@ def execute_multi_language_sandbox(
 
         if lang_clean in ("cpp", "c++", "c"):
             src_file = root / "main.cpp"
-            effective_code = source_code
-            if "int main(" not in source_code:
+            sanitized_source = _sanitize_cpp_code(source_code)
+            sanitized_driver = _sanitize_cpp_code(driver_code) if driver_code else ""
+            effective_code = sanitized_source
+            if "int main(" not in sanitized_source:
                 headers = "#include <bits/stdc++.h>\nusing namespace std;\n\n"
-                tail = f"\n\n{driver_code}" if driver_code else ""
-                effective_code = f"{headers}{source_code}{tail}"
+                tail = f"\n\n{sanitized_driver}" if sanitized_driver else ""
+                effective_code = f"{headers}{sanitized_source}{tail}"
             src_file.write_text(effective_code, encoding="utf-8")
             exe_path = root / ("main.exe" if sys.platform == "win32" else "main")
 
@@ -104,11 +149,12 @@ def execute_multi_language_sandbox(
 
         elif lang_clean in ("java", "openjdk"):
             src_file = root / "Main.java"
-            effective_code = source_code
-            if "public static void main" not in source_code:
+            sanitized_source = re.sub(r"\bpublic\s+class\s+Solution\b", "class Solution", source_code)
+            effective_code = sanitized_source
+            if "public static void main" not in sanitized_source:
                 headers = "import java.io.*;\nimport java.util.*;\n\n"
                 tail = f"\n\n{driver_code}" if driver_code else ""
-                effective_code = f"{headers}{source_code}{tail}"
+                effective_code = f"{headers}{sanitized_source}{tail}"
             src_file.write_text(effective_code, encoding="utf-8")
 
             javac_cmd = shutil.which("javac") or "javac"

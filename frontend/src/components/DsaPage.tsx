@@ -20,6 +20,7 @@ import {
   FileCode2,
   Loader2,
   Lock,
+  Maximize2,
   Play,
   Search,
   Sparkles,
@@ -164,7 +165,7 @@ export default function DsaPage({ onBack }: Props) {
   const [report, setReport] = useState<VivaReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
-  const { startProctoredSession, endProctoredSession } = useProctor()
+  const { startProctoredSession, endProctoredSession, isFullscreen } = useProctor()
 
   // Ingest LeetCode Profile via live FastAPI /api/ingest-leetcode
   const handleIngestLeetCode = async (usernameOrUrl: string) => {
@@ -187,6 +188,13 @@ export default function DsaPage({ onBack }: Props) {
 
   // Open a specific question in the LeetCode Compiler Screen
   const launchQuestion = async (idx: number) => {
+    try {
+      if (!document.fullscreenElement && document.documentElement) {
+        await document.documentElement.requestFullscreen()
+      }
+    } catch (e) {
+      console.warn('Could not enter fullscreen:', e)
+    }
     setActiveQuestionIdx(idx)
     const sid = activeSessionId || `oa_${Date.now()}`
     if (!activeSessionId) {
@@ -346,6 +354,31 @@ export default function DsaPage({ onBack }: Props) {
 
           {/* Actions */}
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {activeSessionId && (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    if (!document.fullscreenElement && document.documentElement) {
+                      await document.documentElement.requestFullscreen()
+                    }
+                  } catch (e) {
+                    console.warn(e)
+                  }
+                  await startProctoredSession(activeSessionId)
+                }}
+                className={`flex items-center gap-1.5 rounded border px-3 py-1.5 text-xs font-semibold transition cursor-pointer ${
+                  isFullscreen
+                    ? 'bg-green-50 text-green-700 border-green-200'
+                    : 'bg-paper-white text-iris-bolt border-indigo-200 hover:bg-lilac-wash'
+                }`}
+                title="Enter Full Screen Proctored Mode"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+                <span>{isFullscreen ? 'Full Screen Active' : 'Full Screen'}</span>
+              </button>
+            )}
+
             {!activeSessionId ? (
               <button
                 className="btn-primary"
@@ -367,6 +400,55 @@ export default function DsaPage({ onBack }: Props) {
           </div>
         </div>
       </header>
+
+      {/* Fullscreen reminder banner if not yet in fullscreen during active compiler session */}
+      {activeSessionId && !isFullscreen && (
+        <div
+          style={{
+            background: '#eef2ff',
+            borderBottom: '1px solid #c7d2fe',
+            padding: '6px 16px',
+            fontSize: 12,
+            color: '#3730a3',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontWeight: 700 }}>Proctored Assessment:</span>
+            <span>Technical DSA rounds run in strict full screen mode.</span>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                if (!document.fullscreenElement && document.documentElement) {
+                  await document.documentElement.requestFullscreen()
+                }
+              } catch (e) {
+                console.warn(e)
+              }
+              await startProctoredSession(activeSessionId)
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              background: '#4255ff',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: 4,
+              padding: '3px 10px',
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            <Maximize2 className="h-3 w-3" /> Enter Full Screen
+          </button>
+        </div>
+      )}
 
       {/* Error banner */}
       {ingestError && (

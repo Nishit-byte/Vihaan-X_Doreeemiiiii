@@ -9,6 +9,8 @@ export interface ProctorContextType {
   isSessionActive: boolean
   terminatedDueToViolation: boolean
   activeSessionId: string | null
+  isFullscreen: boolean
+  enterFullscreen: (sessionId?: string) => Promise<boolean>
   startProctoredSession: (sessionId?: string) => Promise<boolean>
   endProctoredSession: () => Promise<void>
   resetViolation: () => void
@@ -34,6 +36,9 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
   const [isSessionActive, setIsSessionActive] = useState(false)
   const [terminatedDueToViolation, setTerminatedDueToViolation] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [isFullscreen, setIsFullscreen] = useState(
+    typeof document !== 'undefined' ? !!document.fullscreenElement : false
+  )
 
   // Report modal state when viewing partial report from lock screen
   const [showReport, setShowReport] = useState(false)
@@ -78,8 +83,10 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
 
   useEffect(() => {
     const handleFullscreenChange = () => {
+      const inFs = typeof document !== 'undefined' && !!document.fullscreenElement
+      setIsFullscreen(inFs)
       // If candidate was in active proctored mode and exited fullscreen
-      if (isProctoredRef.current && isSessionActiveRef.current && !document.fullscreenElement) {
+      if (isProctoredRef.current && isSessionActiveRef.current && !inFs) {
         triggerViolation('fullscreen_exit')
       }
     }
@@ -100,6 +107,10 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
     }
   }, [])
 
+  const enterFullscreen = async (sessionId?: string): Promise<boolean> => {
+    return startProctoredSession(sessionId || activeSessionIdRef.current || undefined)
+  }
+
   const startProctoredSession = async (sessionId?: string): Promise<boolean> => {
     isProctoredRef.current = true
     isSessionActiveRef.current = true
@@ -117,6 +128,7 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
       if (document.documentElement && !document.fullscreenElement) {
         await document.documentElement.requestFullscreen()
       }
+      setIsFullscreen(true)
       return true
     } catch (e) {
       console.warn('Could not enter fullscreen mode:', e)
@@ -195,6 +207,8 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
         isSessionActive,
         terminatedDueToViolation,
         activeSessionId,
+        isFullscreen,
+        enterFullscreen,
         startProctoredSession,
         endProctoredSession,
         resetViolation,

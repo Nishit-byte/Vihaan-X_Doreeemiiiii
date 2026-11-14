@@ -21,6 +21,7 @@ import {
   HelpCircle,
   Lightbulb,
   Loader2,
+  Maximize2,
   Pause,
   Play,
   RotateCcw,
@@ -29,7 +30,7 @@ import {
 } from 'lucide-react'
 import { runCode } from '../services/apiClient'
 import type { OAQuestion, OATestCase, RunCodeRequest, RunCodeResponse, TestCaseResult } from '../types/api'
-import { ProctorStatusPill } from '../context/ProctorContext'
+import { ProctorStatusPill, useProctor } from '../context/ProctorContext'
 
 export interface LanguageBoilerplate {
   id: string
@@ -128,6 +129,8 @@ export default function LeetCodeWorkspace({
   onSolved,
   initialLanguage = 'cpp',
 }: Props) {
+  const { startProctoredSession, isFullscreen } = useProctor()
+
   // Language & Code State
   const [selectedLang, setSelectedLang] = useState<LanguageBoilerplate>(
     () => LEETCODE_LANGUAGES.find(l => l.id === initialLanguage) ?? LEETCODE_LANGUAGES[0]
@@ -514,6 +517,31 @@ export default function LeetCodeWorkspace({
               className="flex items-center gap-1 text-xs text-slate-veil hover:text-ink-charcoal px-2 py-1 rounded hover:bg-chalk-canvas"
             >
               <RotateCcw className="h-3 w-3" /> Reset Code
+            </button>
+
+            <div className="h-4 w-px bg-mist-border mx-1" />
+
+            {/* Fullscreen Proctoring Toggle */}
+            <button
+              onClick={async () => {
+                try {
+                  if (!document.fullscreenElement && document.documentElement) {
+                    await document.documentElement.requestFullscreen()
+                  }
+                } catch (e) {
+                  console.warn(e)
+                }
+                await startProctoredSession(sessionId)
+              }}
+              title="Enter Full Screen Proctored Mode"
+              className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded border transition cursor-pointer ${
+                isFullscreen
+                  ? 'bg-green-50 text-green-700 border-green-200'
+                  : 'bg-paper-white text-iris-bolt border-indigo-200 hover:bg-lilac-wash'
+              }`}
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+              <span>{isFullscreen ? 'Full Screen On' : 'Full Screen'}</span>
             </button>
           </div>
         </div>
