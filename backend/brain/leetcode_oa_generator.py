@@ -57,7 +57,7 @@ You must handle two categories of profiles:
    `stdin` must be the exact raw string fed to standard input (including newlines if multi-line).
    `expected_output` must be the exact expected string printed to standard output.
 10. `starter_templates`: Object with keys "cpp", "python", "java", "javascript" containing authentic LeetCode `class Solution` method signatures (NO `int main()`, NO standard headers, clean empty method bodies with type annotations).
-11. `driver_code`: Object with keys "cpp", "python", "java", "javascript" containing the hidden driver that parses stdin, invokes `Solution`, and prints the return value to stdout. In `driver_code['cpp']`, you MUST use valid syntax: `#include <iostream>` or start directly with `int main() { ... }`. NEVER write `#iostream` or other invalid preprocessor directives.
+11. `driver_code`: Object with keys "cpp", "python", "java", "javascript". `driver_code` must ONLY contain the stdin/stdout parsing harness (`int main()` for C++, `if __name__ == '__main__':` for Python, `public class Main` for Java, stdin reading script for JS) that instantiates `Solution` and calls its method. `driver_code` must NEVER define or redeclare `class Solution` and must NEVER include standard library headers or `#include` lines.
 
 OUTPUT STRICT JSON ONLY with the key "oa_questions":
 {

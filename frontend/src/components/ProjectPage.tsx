@@ -42,6 +42,13 @@ export default function ProjectPage({ onBack }: Props) {
 
   const startViva = useCallback(async () => {
     if (!pendingFirstTurn) return
+    try {
+      if (!document.fullscreenElement && document.documentElement) {
+        await document.documentElement.requestFullscreen()
+      }
+    } catch (err) {
+      console.warn('Fullscreen request blocked by browser:', err)
+    }
     if (session) {
       await startProctoredSession(session.session_id)
     }

@@ -34,6 +34,7 @@ interface ProviderProps {
 export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
   const [isProctored, setIsProctored] = useState(false)
   const [isSessionActive, setIsSessionActive] = useState(false)
+  const [isProctoredArmed, setIsProctoredArmed] = useState(false)
   const [terminatedDueToViolation, setTerminatedDueToViolation] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(
@@ -49,12 +50,15 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
   // Refs for event listeners to avoid stale closure
   const isProctoredRef = useRef(false)
   const isSessionActiveRef = useRef(false)
+  const isProctoredArmedRef = useRef(false)
   const activeSessionIdRef = useRef<string | null>(null)
 
   const triggerViolation = (reason: string) => {
-    if (!isProctoredRef.current || !isSessionActiveRef.current) return
+    if (!isSessionActiveRef.current) return
 
     // 1. Mark session inactive and violation triggered
+    isProctoredArmedRef.current = false
+    setIsProctoredArmed(false)
     isProctoredRef.current = false
     isSessionActiveRef.current = false
     setIsProctored(false)
@@ -85,15 +89,22 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
     const handleFullscreenChange = () => {
       const inFs = typeof document !== 'undefined' && !!document.fullscreenElement
       setIsFullscreen(inFs)
-      // If candidate was in active proctored mode and exited fullscreen
-      if (isProctoredRef.current && isSessionActiveRef.current && !inFs) {
-        triggerViolation('fullscreen_exit')
+
+      if (inFs) {
+        // Auto-arm anti-plagiarism immediately once fullscreen is entered
+        isProctoredArmedRef.current = true
+        setIsProctoredArmed(true)
+      } else {
+        // If candidate was in active proctored mode and exited fullscreen before finishing
+        if (isProctoredArmedRef.current && isSessionActiveRef.current) {
+          triggerViolation('fullscreen_exit')
+        }
       }
     }
 
     const handleVisibilityChange = () => {
       // If candidate switched tabs or minimized window during active proctored session
-      if (isProctoredRef.current && isSessionActiveRef.current && document.hidden) {
+      if ((isProctoredArmedRef.current || isProctoredRef.current) && isSessionActiveRef.current && document.hidden) {
         triggerViolation('tab_switch_visibility_hidden')
       }
     }
@@ -128,17 +139,24 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
       if (document.documentElement && !document.fullscreenElement) {
         await document.documentElement.requestFullscreen()
       }
-      setIsFullscreen(true)
-      return true
+      const inFs = typeof document !== 'undefined' && !!document.fullscreenElement
+      setIsFullscreen(inFs)
+      if (inFs) {
+        isProctoredArmedRef.current = true
+        setIsProctoredArmed(true)
+      }
+      return inFs
     } catch (e) {
       console.warn('Could not enter fullscreen mode:', e)
-      // Continue proctoring visibility even if browser denied fullscreen
+      // Blocking gate modal will prompt user to click and enter fullscreen
       return false
     }
   }
 
   const endProctoredSession = async (): Promise<void> => {
     // Legitimate completion: disable proctoring first to avoid false violation trigger
+    isProctoredArmedRef.current = false
+    setIsProctoredArmed(false)
     isProctoredRef.current = false
     isSessionActiveRef.current = false
     setIsProctored(false)
@@ -154,6 +172,8 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
   }
 
   const resetViolation = () => {
+    isProctoredArmedRef.current = false
+    setIsProctoredArmed(false)
     isProctoredRef.current = false
     isSessionActiveRef.current = false
     setIsProctored(false)
@@ -215,6 +235,99 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
       }}
     >
       {children}
+
+      {/* ── Blocking Fullscreen Entry Gate Modal ── */}
+      {isSessionActive && !isFullscreen && !terminatedDueToViolation && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 999990,
+            backgroundColor: 'rgba(15, 23, 42, 0.92)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: 16,
+              maxWidth: 480,
+              width: '100%',
+              padding: 32,
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 16,
+            }}
+          >
+            <div
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: '50%',
+                backgroundColor: '#eff6ff',
+                color: '#2563eb',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <ShieldAlert className="h-7 w-7" />
+            </div>
+
+            <div>
+              <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#1e293b' }}>
+                Proctored Assessment Required
+              </h3>
+              <p style={{ margin: 0, fontSize: 14, color: '#64748b', lineHeight: 1.5 }}>
+                To ensure assessment integrity, this round must run in browser fullscreen mode.
+                Exiting fullscreen or switching tabs will immediately terminate the examination.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  if (document.documentElement && !document.fullscreenElement) {
+                    await document.documentElement.requestFullscreen()
+                  }
+                  setIsFullscreen(true)
+                  isProctoredArmedRef.current = true
+                  setIsProctoredArmed(true)
+                } catch (e) {
+                  console.warn('Fullscreen entry failed:', e)
+                }
+              }}
+              style={{
+                marginTop: 8,
+                backgroundColor: '#4255ff',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: 200,
+                padding: '12px 28px',
+                fontSize: 15,
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                boxShadow: '0 4px 6px -1px rgba(66, 85, 255, 0.3)',
+              }}
+            >
+              Click to Enter Proctored Fullscreen Mode to Begin
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Unclosable Anti-Plagiarism Violation Lock Screen ── */}
       {terminatedDueToViolation && (
@@ -385,7 +498,7 @@ export function ProctorStatusPill() {
       title="Strict fullscreen proctoring is actively monitoring this session."
     >
       <ShieldCheck className="h-3.5 w-3.5 text-green-600" />
-      <span>Proctored Fullscreen Active</span>
+      <span>Proctored · Fullscreen</span>
     </div>
   )
 }

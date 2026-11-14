@@ -79,6 +79,102 @@ def _sanitize_cpp_code(code: str) -> str:
     return "\n".join(sanitized_lines)
 
 
+def _strip_solution_class_braces(code: str) -> str:
+    """Removes any class Solution { ... }; block using brace-depth matching."""
+    if not code:
+        return ""
+    pattern = re.compile(r"\b(?:(?:public|private|protected)\s+)?class\s+Solution\b[^{]*\{")
+    while True:
+        match = pattern.search(code)
+        if not match:
+            break
+        start = match.start()
+        depth = 1
+        pos = match.end()
+        while pos < len(code) and depth > 0:
+            ch = code[pos]
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+            pos += 1
+        while pos < len(code) and code[pos] in (' ', '\t', ';'):
+            pos += 1
+        if pos < len(code) and code[pos] == '\n':
+            pos += 1
+        code = code[:start] + code[pos:]
+    return code
+
+
+def _clean_driver_cpp(code: str) -> str:
+    """Strips class Solution, duplicate #include and using namespace lines from driver_code."""
+    if not code:
+        return ""
+    code = _sanitize_cpp_code(code)
+    code = _strip_solution_class_braces(code)
+    lines = []
+    for line in code.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("#include") or trimmed == "using namespace std;":
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _clean_driver_java(code: str) -> str:
+    """Strips class Solution and duplicate import lines from driver_code."""
+    if not code:
+        return ""
+    code = _strip_solution_class_braces(code)
+    lines = []
+    for line in code.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("import java."):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _clean_driver_python(code: str) -> str:
+    """Strips class Solution and duplicate import lines from Python driver_code."""
+    if not code:
+        return ""
+    lines = code.splitlines()
+    cleaned = []
+    in_solution = False
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^class\s+Solution\b", stripped):
+            in_solution = True
+            continue
+        if in_solution:
+            if not stripped or line.startswith((" ", "\t")):
+                continue
+            else:
+                in_solution = False
+        if stripped.startswith((
+            "import sys", "from typing import", "import collections",
+            "import heapq", "import math", "import bisect"
+        )):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+
+def _clean_driver_javascript(code: str) -> str:
+    """Strips class Solution / var Solution and duplicate fs imports from JS driver_code."""
+    if not code:
+        return ""
+    code = _strip_solution_class_braces(code)
+    lines = []
+    for line in code.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("const fs = require('fs')") or trimmed.startswith('const fs = require("fs")'):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 def _minimal_environment() -> dict[str, str]:
     allowed_keys = ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP")
     env = {k: os.environ[k] for k in allowed_keys if k in os.environ}
@@ -114,12 +210,11 @@ def execute_multi_language_sandbox(
         if lang_clean in ("cpp", "c++", "c"):
             src_file = root / "main.cpp"
             sanitized_source = _sanitize_cpp_code(source_code)
-            sanitized_driver = _sanitize_cpp_code(driver_code) if driver_code else ""
-            effective_code = sanitized_source
+            cleaned_driver = _clean_driver_cpp(driver_code) if driver_code else ""
             if "int main(" not in sanitized_source:
-                headers = "#include <bits/stdc++.h>\nusing namespace std;\n\n"
-                tail = f"\n\n{sanitized_driver}" if sanitized_driver else ""
-                effective_code = f"{headers}{sanitized_source}{tail}"
+                effective_code = f"#include <bits/stdc++.h>\nusing namespace std;\n\n{sanitized_source}\n\n{cleaned_driver}"
+            else:
+                effective_code = f"#include <bits/stdc++.h>\nusing namespace std;\n\n{sanitized_source}"
             src_file.write_text(effective_code, encoding="utf-8")
             exe_path = root / ("main.exe" if sys.platform == "win32" else "main")
 
@@ -150,11 +245,11 @@ def execute_multi_language_sandbox(
         elif lang_clean in ("java", "openjdk"):
             src_file = root / "Main.java"
             sanitized_source = re.sub(r"\bpublic\s+class\s+Solution\b", "class Solution", source_code)
-            effective_code = sanitized_source
+            cleaned_driver = _clean_driver_java(driver_code) if driver_code else ""
             if "public static void main" not in sanitized_source:
-                headers = "import java.io.*;\nimport java.util.*;\n\n"
-                tail = f"\n\n{driver_code}" if driver_code else ""
-                effective_code = f"{headers}{sanitized_source}{tail}"
+                effective_code = f"import java.io.*;\nimport java.util.*;\n\n{sanitized_source}\n\n{cleaned_driver}"
+            else:
+                effective_code = f"import java.io.*;\nimport java.util.*;\n\n{sanitized_source}"
             src_file.write_text(effective_code, encoding="utf-8")
 
             javac_cmd = shutil.which("javac") or "javac"
@@ -196,11 +291,11 @@ def execute_multi_language_sandbox(
 
         elif lang_clean in ("javascript", "js", "node"):
             src_file = root / "main.js"
-            effective_code = source_code
+            cleaned_driver = _clean_driver_javascript(driver_code) if driver_code else ""
             if "readFileSync" not in source_code:
-                headers = "const fs = require('fs');\n\n"
-                tail = f"\n\n{driver_code}" if driver_code else ""
-                effective_code = f"{headers}{source_code}{tail}"
+                effective_code = f"const fs = require('fs');\n\n{source_code}\n\n{cleaned_driver}"
+            else:
+                effective_code = source_code
             src_file.write_text(effective_code, encoding="utf-8")
             node_cmd = shutil.which("node") or "node"
             executable_cmd = [node_cmd, str(src_file)]
@@ -208,11 +303,11 @@ def execute_multi_language_sandbox(
         else:
             # Default: Python
             src_file = root / "main.py"
-            effective_code = source_code
-            if "__main__" not in source_code and "def solve(" not in source_code:
-                headers = "import sys\nfrom typing import *\nimport collections, heapq, math, bisect\n\n"
-                tail = f"\n\n{driver_code}" if driver_code else ""
-                effective_code = f"{headers}{source_code}{tail}"
+            cleaned_driver = _clean_driver_python(driver_code) if driver_code else ""
+            if "__main__" not in source_code:
+                effective_code = f"from typing import *\nimport sys, math, heapq, bisect, collections\n\n{source_code}\n\n{cleaned_driver}"
+            else:
+                effective_code = source_code
             src_file.write_text(effective_code, encoding="utf-8")
             executable_cmd = [sys.executable, str(src_file)]
 
