@@ -30,7 +30,9 @@ from backend.models.schemas import (
     ASTFunctionSymbol,
     CodeHighlight,
     CodingChallenge,
+    LeetCodeProfileData,
     LeetCodeProfileSummary,
+    OAQuestion,
     PaperIndex,
     PaperNode,
     RepoIndex,
@@ -94,6 +96,9 @@ class VivaSession:
     dsa_topic: str = "Arrays & Hashing"
     current_dsa_problem: Any = None
     solved_dsa_ids: List[str] = field(default_factory=list)
+    leetcode_data: Optional[LeetCodeProfileData] = None
+    oa_questions: List[OAQuestion] = field(default_factory=list)
+    current_oa_idx: int = 0
     selected_author: Optional[str] = None
     current_depth: int = 1
     current_symbol_idx: int = 0
@@ -499,11 +504,15 @@ class SessionManager:
         audio_synthesizer: Optional[Callable[[str], str]] = None,
         dsa_profile: Optional[LeetCodeProfileSummary] = None,
         dsa_topic: str = "Arrays & Hashing",
+        leetcode_data: Optional[LeetCodeProfileData] = None,
+        oa_questions: Optional[List[OAQuestion]] = None,
     ) -> TurnResponse:
         """Initializes a new viva session at Bloom Level 1 (Recall) and emits the opening turn."""
         session_id = str(uuid.uuid4())
         if mode == "repo" and repo_index:
             title = repo_index.repo_name
+        elif mode == "dsa" and leetcode_data:
+            title = f"LeetCode OA ({leetcode_data.username} — {leetcode_data.category})"
         elif mode == "dsa" and dsa_profile:
             title = f"LeetCode DSA Prep ({dsa_profile.username} — {dsa_topic})"
         elif paper_index:
@@ -512,7 +521,7 @@ class SessionManager:
             title = "VivaVoce Session"
 
         initial_problem = None
-        if mode == "dsa" and dsa_profile is not None:
+        if mode == "dsa" and dsa_profile is not None and not oa_questions:
             from backend.brain.dsa_coach import pick_initial_problem
 
             initial_problem = pick_initial_problem(dsa_profile, dsa_topic)
@@ -526,6 +535,9 @@ class SessionManager:
             dsa_profile=dsa_profile,
             dsa_topic=dsa_topic,
             current_dsa_problem=initial_problem,
+            leetcode_data=leetcode_data,
+            oa_questions=oa_questions or [],
+            current_oa_idx=0,
             selected_author=selected_author,
             current_depth=1,
             current_symbol_idx=0,
@@ -884,6 +896,140 @@ class SessionManager:
         audio_synthesizer: Optional[Callable[[str], str]],
         is_initial_turn: bool,
     ) -> TurnResponse:
+        # Branch for Adaptive LeetCode OA round
+        if session.oa_questions:
+            cur_idx = session.current_oa_idx
+            total_oa = len(session.oa_questions)
+            oa_q = session.oa_questions[min(cur_idx, total_oa - 1)]
+            target_file = f"oa/{oa_q.question_id.lower().replace('-', '_')}.py"
+            challenge = CodingChallenge(
+                description=f"[{oa_q.difficulty}] {oa_q.title} — {oa_q.problem_statement}",
+                target_file=target_file,
+                starter_code=oa_q.starter_code or "",
+                test_code=oa_q.test_code or "",
+            )
+            session.active_challenge = challenge
+
+            if is_initial_turn and not session.turns:
+                verdict: VerdictType = "start"
+                next_depth = 1
+                ack_text = (
+                    f"Connected LeetCode telemetry for @{session.leetcode_data.username} "
+                    f"({session.leetcode_data.category}, {session.leetcode_data.total_solved} solved)."
+                    if session.leetcode_data
+                    else "Connected LeetCode telemetry."
+                )
+                question_text = (
+                    f"Welcome to your adaptive OA round! Challenge 1 of {total_oa} [{oa_q.difficulty}]: {oa_q.title}. "
+                    f"{oa_q.selection_reason} {oa_q.problem_statement[:220]}... "
+                    f"Before implementing in `{target_file}`, explain your algorithmic strategy and time/space complexity."
+                )
+                action = "TriggerCodeChallenge"
+            elif code_result is not None:
+                if code_result.passed:
+                    verdict = "strong"
+                    next_depth = min(4, session.current_depth + 1)
+                    session.current_oa_idx += 1
+                    if session.current_oa_idx < total_oa:
+                        next_oa = session.oa_questions[session.current_oa_idx]
+                        next_target = f"oa/{next_oa.question_id.lower().replace('-', '_')}.py"
+                        next_challenge = CodingChallenge(
+                            description=f"[{next_oa.difficulty}] {next_oa.title} — {next_oa.problem_statement}",
+                            target_file=next_target,
+                            starter_code=next_oa.starter_code,
+                            test_code=next_oa.test_code,
+                        )
+                        session.active_challenge = next_challenge
+                        challenge = next_challenge
+                        ack_text = f"All pytest cases passed for {oa_q.title} in {code_result.runtime_ms}ms!"
+                        question_text = (
+                            f"Advancing to Challenge {session.current_oa_idx + 1} of {total_oa} [{next_oa.difficulty}]: {next_oa.title}. "
+                            f"{next_oa.selection_reason} Walk me through your approach and implement it in `{next_target}`."
+                        )
+                        action = "TriggerCodeChallenge"
+                    else:
+                        session.done = True
+                        ack_text = f"Outstanding! All pytest cases passed in {code_result.runtime_ms}ms."
+                        question_text = (
+                            f"Congratulations! You have completed all {total_oa} adaptive OA challenges. "
+                            f"Click 'Finish viva' or 'View Report' to inspect your competency rubric."
+                        )
+                        action = "Probe"
+                else:
+                    verdict = "partial"
+                    next_depth = max(2, session.current_depth)
+                    ack_text = f"Your code failed a pytest assertion on {oa_q.title}."
+                    question_text = (
+                        f"Inspect the pytest failure in `{target_file}`: what boundary condition or constraint was violated? "
+                        f"Explain the discrepancy or fix your solution and click Run & Verify."
+                    )
+                    action = "Probe"
+            else:
+                word_count = len(clean_transcript.split())
+                if not clean_transcript:
+                    verdict = "no_answer"
+                elif word_count >= 6:
+                    verdict = "strong"
+                else:
+                    verdict = "partial"
+
+                if verdict == "strong":
+                    next_depth = min(4, session.current_depth + 1)
+                    ack_text = f"Good grasp on {', '.join(oa_q.topics)}."
+                    question_text = (
+                        f"Now implement your solution for `{oa_q.title}` in `{target_file}` "
+                        f"and click Run & Verify to validate against all pytest cases."
+                    )
+                    action = "TriggerCodeChallenge"
+                else:
+                    next_depth = session.current_depth
+                    ack_text = f"Consider the constraints for {oa_q.title}."
+                    question_text = (
+                        f"How does your strategy handle the problem constraints ({', '.join(oa_q.constraints[:2])})? "
+                        f"Refine your explanation or begin coding in `{target_file}`."
+                    )
+                    action = "Hint"
+
+            session.current_depth = next_depth
+            turn_number = len(session.turns) + 1
+            if turn_number >= session.max_turns:
+                session.done = True
+
+            spoken_script = f"{ack_text} {question_text}".strip()
+            audio_b64 = audio_synthesizer(spoken_script) if audio_synthesizer else ""
+            topic_label = f"{', '.join(oa_q.topics)}: {oa_q.title} ({oa_q.difficulty})"
+
+            record = TurnRecord(
+                turn_index=turn_number,
+                student_raw_transcript=raw_transcript,
+                student_clean_transcript=clean_transcript,
+                verdict=verdict,
+                action=action,
+                ack_text=ack_text,
+                question_text=question_text,
+                topic=topic_label,
+                depth_level=session.current_depth,
+                coding_challenge=challenge,
+                code_result=code_result,
+            )
+            session.turns.append(record)
+
+            return TurnResponse(
+                session_id=session.session_id,
+                student_transcript=raw_transcript or clean_transcript,
+                verdict=verdict,
+                ack_text=ack_text,
+                question_text=question_text,
+                audio_base64=audio_b64,
+                topic=topic_label,
+                depth_level=session.current_depth,
+                highlight=None,
+                diagram_node_id=None,
+                paper_excerpt=None,
+                coding_challenge=challenge,
+                done=session.done,
+            )
+
         from backend.brain.dsa_coach import (
             DSA_PROBLEMS,
             detect_student_lacks,
@@ -1036,6 +1182,8 @@ def start_session(
     audio_synthesizer: Optional[Callable[[str], str]] = None,
     dsa_profile: Optional[LeetCodeProfileSummary] = None,
     dsa_topic: str = "Arrays & Hashing",
+    leetcode_data: Optional[LeetCodeProfileData] = None,
+    oa_questions: Optional[List[OAQuestion]] = None,
 ) -> TurnResponse:
     """Module-level entrypoint to start a new VivaVoce session."""
     return session_manager.start_session(
@@ -1046,6 +1194,8 @@ def start_session(
         audio_synthesizer=audio_synthesizer,
         dsa_profile=dsa_profile,
         dsa_topic=dsa_topic,
+        leetcode_data=leetcode_data,
+        oa_questions=oa_questions,
     )
 
 

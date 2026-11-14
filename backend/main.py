@@ -28,12 +28,18 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.brain.grader import generate_final_report
+from backend.brain.oa_generator import generate_oa_questions
 from backend.brain.state_machine import SESSIONS, process_turn, start_session
+from backend.ingestion.leetcode_parser import fetch_leetcode_profile
 from backend.models.schemas import (
     ASTFunctionSymbol,
     IngestDsaRequest,
+    IngestLeetCodeRequest,
+    IngestLeetCodeResponse,
     IngestRepoRequest,
     IngestResponse,
+    LeetCodeProfileData,
+    OAQuestion,
     OwnedSymbol,
     PaperIndex,
     PaperNode,
@@ -664,6 +670,41 @@ async def ingest_dsa(req: IngestDsaRequest) -> IngestResponse:
     )
 
 
+@app.post("/api/ingest-leetcode", response_model=IngestLeetCodeResponse)
+async def ingest_leetcode(req: IngestLeetCodeRequest) -> IngestLeetCodeResponse:
+    """
+    1. Fetches public LeetCode telemetry via GraphQL and classifies profile into Category 1 or 2.
+    2. Synthesizes 5-6 adaptive OA questions tailored to solved questions or top skill tier tags.
+    3. Initializes an adaptive viva session and returns IngestLeetCodeResponse with initial_turn.
+    """
+    if not req.username_or_url or not req.username_or_url.strip():
+        raise HTTPException(status_code=400, detail="username_or_url is required.")
+
+    profile = await fetch_leetcode_profile(req.username_or_url.strip())
+    oa_questions = await generate_oa_questions(
+        profile=profile,
+        num_easy=req.num_easy,
+        num_medium=req.num_medium,
+        num_hard=req.num_hard,
+    )
+
+    initial_turn = start_session(
+        mode="dsa",
+        leetcode_data=profile,
+        oa_questions=oa_questions,
+        audio_synthesizer=None,
+    )
+    initial_turn.audio_base64 = ""
+
+    return IngestLeetCodeResponse(
+        session_id=initial_turn.session_id,
+        profile=profile,
+        oa_questions=oa_questions,
+        initial_turn=initial_turn,
+    )
+
+
+
 @app.post("/api/viva/turn", response_model=TurnResponse)
 async def viva_turn(
     request: Request,
@@ -735,31 +776,47 @@ async def viva_turn(
 @app.post("/api/run-code", response_model=RunCodeResponse)
 async def run_code(req: RunCodeRequest) -> RunCodeResponse:
     """
-    Executes the student's live bug fix against the session's `pytest` suite inside
-    an isolated 4-second subprocess (`sandbox_runner.py`) and records the empirical result.
+    Executes candidate code either via multi-language stdin/stdout sandbox (OA mode)
+    or via isolated 4-second pytest verification (Repo Viva mode).
     """
     session = SESSIONS.get(req.session_id)
-    effective_test_code = req.test_code
+    source = req.source_code or req.student_code or ""
 
-    if not effective_test_code and session and session.active_challenge:
-        effective_test_code = session.active_challenge.test_code
+    if (
+        req.test_cases
+        or req.custom_input is not None
+        or (req.language and req.language.lower() in ("cpp", "c++", "java", "javascript", "js"))
+    ):
+        from backend.sandbox.sandbox_runner import execute_multi_language_sandbox
 
-    result = _invoke_m2_sandbox(
-        file_path=req.file_path,
-        student_code=req.student_code,
-        test_code=effective_test_code or "",
-    )
+        result = execute_multi_language_sandbox(
+            language=req.language or "python",
+            source_code=source,
+            test_cases=req.test_cases,
+            run_hidden=req.run_hidden,
+            custom_input=req.custom_input,
+        )
+    else:
+        effective_test_code = req.test_code
+        if not effective_test_code and session and session.active_challenge:
+            effective_test_code = session.active_challenge.test_code
+
+        result = _invoke_m2_sandbox(
+            file_path=req.file_path or "main.py",
+            student_code=source,
+            test_code=effective_test_code or "",
+        )
 
     if session is not None:
         challenge_desc = (
             session.active_challenge.description
             if session.active_challenge
-            else f"Live sandbox verification on {req.file_path}"
+            else f"Sandbox execution on {req.file_path or 'solution'}"
         )
         session.code_results.append(
             {
                 "challenge_description": challenge_desc,
-                "target_file": req.file_path,
+                "target_file": req.file_path or "main.py",
                 "passed": result.passed,
                 "runtime_ms": result.runtime_ms,
             }
