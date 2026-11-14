@@ -58,6 +58,13 @@ def clean_asr_transcript(raw_text: Optional[str]) -> str:
     cleaned = raw_text.strip()
     for pattern in ASR_FILLER_PATTERNS:
         cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+    # Strip syllable stutters: e.g. "c-cosine" or "w-what" or "th-the" -> "cosine", "what", "the"
+    cleaned = re.sub(r"\b([a-zA-Z]{1,3})-+(?=[a-zA-Z]{2,})", "", cleaned)
+    # Strip stuttered word repetitions: e.g. "in, in" or "in in" -> "in", "the the" -> "the", "we we" -> "we"
+    cleaned = re.sub(r"\b([a-zA-Z0-9_]+)(?:[,\s]+\1\b)+", r"\1", cleaned, flags=re.IGNORECASE)
+    # Clean up orphaned punctuation and normalize whitespace
+    cleaned = re.sub(r"[,\s]+([,.?!])", r"\1", cleaned)
+    cleaned = re.sub(r"^[,\s;:-]+", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
@@ -113,6 +120,50 @@ SESSIONS: Dict[str, VivaSession] = {}
 # GEMINI 2.5 FLASH JSON CLIENT (WITH OFFLINE DETERMINISTIC FALLBACK)
 # ============================================================================
 
+def _robust_json_parse(raw_text: str) -> Optional[Dict[str, Any]]:
+    """Robustly extracts and parses JSON dictionary from LLM response text,
+    handling markdown fences, leading/trailing prose, and trailing commas."""
+    if not raw_text or not raw_text.strip():
+        return None
+    s = raw_text.strip()
+
+    # 1. Strip markdown fences if present (```json ... ``` or ``` ... ```)
+    if s.startswith("```"):
+        s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+        s = re.sub(r"\s*```$", "", s)
+        s = s.strip()
+
+    # 2. Try direct json.loads
+    try:
+        val = json.loads(s)
+        if isinstance(val, dict):
+            return val
+    except Exception:
+        pass
+
+    # 3. Search for outermost JSON object { ... }
+    m = re.search(r"(\{.*\})", s, re.DOTALL)
+    if m:
+        candidate = m.group(1).strip()
+        try:
+            val = json.loads(candidate)
+            if isinstance(val, dict):
+                return val
+        except Exception:
+            pass
+
+        # 4. Clean trailing commas before closing braces/brackets
+        cleaned = re.sub(r",\s*([}\]])", r"\1", candidate)
+        try:
+            val = json.loads(cleaned)
+            if isinstance(val, dict):
+                return val
+        except Exception:
+            pass
+
+    return None
+
+
 def _call_gemini_json(system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
     """
     Calls Gemini 2.5 Flash enforcing `response_mime_type="application/json"`.
@@ -141,7 +192,9 @@ def _call_gemini_json(system_prompt: str, user_prompt: str) -> Optional[Dict[str
             ),
         )
         if response and response.text:
-            return json.loads(response.text)
+            parsed = _robust_json_parse(response.text)
+            if parsed:
+                return parsed
     except ImportError:
         pass
     except Exception:
@@ -159,7 +212,9 @@ def _call_gemini_json(system_prompt: str, user_prompt: str) -> Optional[Dict[str
         )
         response = model.generate_content(user_prompt)
         if response and response.text:
-            return json.loads(response.text)
+            parsed = _robust_json_parse(response.text)
+            if parsed:
+                return parsed
     except Exception:
         pass
 
@@ -186,42 +241,79 @@ def _evaluate_student_answer_heuristically(
     if not clean_text or len(clean_text.strip()) < 3:
         return "no_answer"
 
-    words = clean_text.lower().split()
-    if any(p in clean_text.lower() for p in ["i don't know", "not sure", "skip", "pass", "no idea"]):
+    # Genuine surrender / give-up intent (ignoring technical uses of 'pass' or 'skip')
+    surrender_patterns = [
+        r"\bi\s+(don'?t|do\s+not)\s+know\b",
+        r"\bnot\s+sure\b",
+        r"\bno\s+idea\b",
+        r"^\s*(pass|skip|i\s+pass|please\s+skip)\s*[.?!]*$",
+        r"\b(i\s+pass|please\s+skip|skip\s+this|pass\s+this)\b",
+    ]
+    if any(re.search(pat, clean_text, re.IGNORECASE) for pat in surrender_patterns):
         return "weak"
+
+    words = re.findall(r"[a-zA-Z0-9_]+", clean_text.lower())
+    if not words:
+        return "no_answer"
 
     # Extract domain keywords from current AST symbol or Paper node
     domain_terms: set[str] = set()
     if symbol:
-        domain_terms.update(
-            t.lower()
-            for t in (
-                [symbol.name]
-                + symbol.args
-                + symbol.calls
-                + symbol.constants
-                + re.findall(r"[a-zA-Z_]{4,}", symbol.docstring or "")
-            )
+        raw_items = (
+            [symbol.name]
+            + symbol.args
+            + symbol.calls
+            + symbol.constants
+            + re.findall(r"[a-zA-Z_]{3,}", symbol.docstring or "")
         )
+        for item in raw_items:
+            lower = item.lower()
+            domain_terms.add(lower)
+            for sub in re.split(r"[._\s]+", lower):
+                if len(sub) >= 3:
+                    domain_terms.add(sub)
+                    if sub == "vec":
+                        domain_terms.add("vector")
+                        domain_terms.add("vectors")
+                    elif sub == "doc":
+                        domain_terms.add("document")
     if node:
         domain_terms.update(
-            t.lower() for t in re.findall(r"[a-zA-Z]{4,}", f"{node.label} {node.excerpt}")
+            t.lower() for t in re.findall(r"[a-zA-Z]{3,}", f"{node.label} {node.excerpt}")
         )
 
     technical_indicators = {
         "complexity", "time", "space", "memory", "loop", "hash", "dict", "list",
         "async", "await", "cache", "index", "tree", "node", "edge", "boundary",
         "null", "none", "empty", "zero", "exception", "error", "return", "function",
-        "parameter", "complexity", "latency", "throughput", "threshold", "vector",
-        "matrix", "gradient", "attention", "layer", "loss", "normalization", "token",
+        "parameter", "parameters", "latency", "throughput", "threshold", "vector",
+        "vectors", "matrix", "matrices", "gradient", "attention", "layer", "loss",
+        "normalization", "token", "tokens", "dot", "product", "norm", "norms", "l2",
+        "linear", "constant", "quadratic", "logarithmic", "tradeoff", "trade-off",
+        "tradeoffs", "bottleneck", "concurrency", "concurrent", "dimension",
+        "dimensions", "scale", "scaling", "iterate", "iteration", "iterating",
+        "generator", "generators", "auxiliary", "magnitude", "magnitudes",
+        "divide", "division", "precision", "floor", "rerank", "cosine", "similarity",
+        "similarity_floor", "dot_product", "l2_norm",
     }
 
     matched_domain = sum(1 for w in set(words) if w in domain_terms)
     matched_tech = sum(1 for w in set(words) if w in technical_indicators)
 
-    if len(words) >= 10 and (matched_domain >= 1 or matched_tech >= 2):
+    # Multi-word technical concept bonuses in full text
+    multi_word_concepts = [
+        "dot product", "cosine similarity", "time complexity", "space complexity",
+        "l2 norm", "auxiliary memory", "auxiliary space", "in place", "in-place",
+        "linear time", "constant space", "worst case", "worst-case", "single pass",
+        "similarity floor", "zero division", "floating point", "vector dimension"
+    ]
+    lower_text = clean_text.lower()
+    matched_phrases = sum(1 for phrase in multi_word_concepts if phrase in lower_text)
+    effective_tech = matched_tech + (matched_phrases * 2)
+
+    if len(words) >= 10 and (matched_domain >= 1 or effective_tech >= 2):
         return "strong"
-    if len(words) >= 5 and (matched_domain >= 1 or matched_tech >= 1):
+    if len(words) >= 5 and (matched_domain >= 1 or effective_tech >= 1):
         return "partial"
     if len(words) >= 14:
         return "partial"
@@ -670,7 +762,12 @@ class SessionManager:
         if llm_out and "question_text" in llm_out:
             llm_verdict = llm_out.get("verdict")
             if not is_initial_turn and llm_verdict in ("strong", "partial", "weak", "no_answer"):
-                verdict = llm_verdict  # type: ignore
+                # Fluency-blind protection: If deterministic heuristic verified strong technical substance,
+                # do not downgrade to weak/no_answer due to LLM ASR/fluency bias
+                if verdict == "strong" and llm_verdict in ("weak", "no_answer"):
+                    pass
+                else:
+                    verdict = llm_verdict  # type: ignore
                 if verdict == "strong":
                     next_depth = min(4, session.current_depth + 1)
 
@@ -828,7 +925,12 @@ class SessionManager:
         if llm_out and "question_text" in llm_out:
             llm_verdict = llm_out.get("verdict")
             if not is_initial_turn and llm_verdict in ("strong", "partial", "weak", "no_answer"):
-                verdict = llm_verdict  # type: ignore
+                # Fluency-blind protection: If deterministic heuristic verified strong technical substance,
+                # do not downgrade to weak/no_answer due to LLM ASR/fluency bias
+                if verdict == "strong" and llm_verdict in ("weak", "no_answer"):
+                    pass
+                else:
+                    verdict = llm_verdict  # type: ignore
                 if verdict == "strong":
                     next_depth = min(4, session.current_depth + 1)
 
