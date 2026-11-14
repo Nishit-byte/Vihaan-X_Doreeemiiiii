@@ -709,10 +709,30 @@ class SessionManager:
 
         # 4. Check session completion
         turn_number = len(session.turns) + 1
-        if turn_number >= session.max_turns:
+        is_closing = False
+        if code_result is not None and code_result.passed:
+            is_closing = True
+            session.done = True
+        elif turn_number >= session.max_turns:
+            is_closing = True
             session.done = True
 
-        spoken_script = f"{ack_text} {question_text}".strip()
+        if is_closing:
+            if code_result is not None and code_result.passed:
+                ack_text = f"Excellent work! Your live bug fix in {active_symbol.file_path} passed all pytest verification tests in {code_result.runtime_ms}ms."
+            else:
+                # Keep the real feedback on the final answer; append a neutral closing line
+                sep = "" if ack_text.rstrip().endswith((".", "!", "?")) else "."
+                ack_text = f"{ack_text.rstrip()}{sep} Thank you for completing the technical viva for {session.title}."
+            question_text = "That concludes your examination across all cognitive levels. Click 'View Full Report' to review your competency scores, topic depth radar, and personalized study plan."
+            topic = "Viva Complete"
+            action = "ConcludeViva"
+
+        try:
+            from backend.voice.tts_service import build_spoken_text
+            spoken_script = build_spoken_text(ack_text, question_text)
+        except Exception:
+            spoken_script = f"{ack_text} {question_text}".strip()
         audio_b64 = audio_synthesizer(spoken_script) if audio_synthesizer else ""
 
         record = TurnRecord(
@@ -840,8 +860,18 @@ class SessionManager:
         turn_number = len(session.turns) + 1
         if turn_number >= session.max_turns:
             session.done = True
+            # Keep the real feedback on the final answer; append a neutral closing line
+            sep = "" if ack_text.rstrip().endswith((".", "!", "?")) else "."
+            ack_text = f"{ack_text.rstrip()}{sep} Thank you for completing the paper viva for {session.title}."
+            question_text = "That concludes your paper viva examination. Click 'View Full Report' to review your competency scores, topic depth radar, and personalized study plan."
+            topic = "Viva Complete"
+            action = "ConcludeViva"
 
-        spoken_script = f"{ack_text} {question_text}".strip()
+        try:
+            from backend.voice.tts_service import build_spoken_text
+            spoken_script = build_spoken_text(ack_text, question_text)
+        except Exception:
+            spoken_script = f"{ack_text} {question_text}".strip()
         audio_b64 = audio_synthesizer(spoken_script) if audio_synthesizer else ""
 
         record = TurnRecord(

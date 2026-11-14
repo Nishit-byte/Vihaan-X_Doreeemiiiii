@@ -26,9 +26,9 @@ except ValueError:
 TTS_VOICE: str = os.getenv("TTS_VOICE", "en-US-AndrewNeural")
 TTS_RATE: str = os.getenv("TTS_RATE", "+0%")
 try:
-    TTS_TIMEOUT_S: float = float(os.getenv("TTS_TIMEOUT_S", "8"))
+    TTS_TIMEOUT_S: float = float(os.getenv("TTS_TIMEOUT_S", "40"))
 except ValueError:
-    TTS_TIMEOUT_S = 8.0
+    TTS_TIMEOUT_S = 40.0
 
 # ElevenLabs (optional fallback)
 ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")

@@ -7,8 +7,8 @@ Locked in Hour 1 so M1, M2, M3, and M4 can develop in parallel with zero merge c
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, Field, model_validator
 
 
 # ============================================================================
@@ -120,6 +120,10 @@ class TurnRequest(BaseModel):
         default=None,
         description="Base64-encoded WebM/WAV audio from browser MediaRecorder"
     )
+    audio_mime: Optional[str] = Field(
+        default=None,
+        description="Optional audio MIME type from browser MediaRecorder"
+    )
     selected_author: Optional[str] = Field(
         default=None,
         description="Optional git blame contributor filter"
@@ -144,6 +148,32 @@ class TurnResponse(BaseModel):
     paper_excerpt: Optional[str] = None
     coding_challenge: Optional[CodingChallenge] = None
     done: bool = False
+    examiner_message: Optional[str] = None
+    question: Optional[str] = None
+    is_complete: Optional[bool] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            ack = data.get("ack_text")
+            ex_msg = data.get("examiner_message")
+            eff_ack = ex_msg if (ex_msg is not None and str(ex_msg).strip()) else (ack or "")
+            data["ack_text"] = eff_ack
+            data["examiner_message"] = eff_ack
+
+            q_text = data.get("question_text")
+            q_alt = data.get("question")
+            eff_q = q_alt if (q_alt is not None and str(q_alt).strip()) else (q_text or "")
+            data["question_text"] = eff_q
+            data["question"] = eff_q
+
+            is_done = data.get("done")
+            is_comp = data.get("is_complete")
+            eff_done = bool(is_comp if is_comp is not None else is_done)
+            data["done"] = eff_done
+            data["is_complete"] = eff_done
+        return data
 
 
 # ============================================================================
@@ -182,6 +212,20 @@ class IngestResponse(BaseModel):
     paper_nodes: List[PaperNode] = Field(default_factory=list)
     dsa_profile: Optional[LeetCodeProfileSummary] = None
     initial_turn: TurnResponse
+    first_turn: Optional[TurnResponse] = None
+    paper: Optional[Any] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_first_turn(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            init_t = data.get("initial_turn")
+            first_t = data.get("first_turn")
+            chosen = init_t or first_t
+            if chosen is not None:
+                data["initial_turn"] = chosen
+                data["first_turn"] = chosen
+        return data
 
 
 # ============================================================================
@@ -219,6 +263,8 @@ class VivaReport(BaseModel):
     code_challenges: List[CodeVerificationSummary] = Field(default_factory=list)
     strengths: List[str] = Field(default_factory=list)
     study_plan: List[str] = Field(default_factory=list)
+    closing_remark: Optional[str] = None
+    audio_base64: Optional[str] = None
     fluency_audit_note: str = (
         "Fluency & Accent Weight: 0% — Graded strictly on technical semantics, "
         "AST-grounded reasoning, and empirical code execution (Koenecke et al., PNAS 2020)."
