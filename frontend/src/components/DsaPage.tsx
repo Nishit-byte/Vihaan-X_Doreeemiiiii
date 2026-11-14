@@ -1,251 +1,205 @@
 /**
  * DsaPage — Data Structures & Algorithms / Online Assessment Prep
- * Allows users to choose or create DSA & OA problems, write code with live tests,
- * and be examined by the AI voice/text examiner on time complexity, edge cases, and trade-offs.
+ * 
+ * Features:
+ * 1. LeetCode Profile Telemetry Ingestion via /api/ingest-leetcode (Dynamic Gemini per LeetCode ID)
+ * 2. Adaptive OA Generation:
+ *    - Category 1 (PUBLIC_SOLVED_LIST): Question concept mutations
+ *    - Category 2 (HIDDEN_TOPIC_COUNTS_ONLY): Weighted strictly by Fundamental, Intermediate, and Advanced tier tag counts
+ * 3. 5-Question Tailored OA Suite with direct redirection to the LeetCode Compiler screen
+ * 4. 2-Column Split-Screen OA Environment (LeetCodeWorkspace):
+ *    - Left 40%: Problem title, difficulty, topics, selection reason, description, examples, constraints, text-only AI hint
+ *    - Right 60%: Language selector (C++, Python, Java, JS), clean boilerplate, timer, Monaco editor, dynamic testcase console
+ * 5. Completely ZERO voice / audio / spoken examiner clutter.
  */
-import { useCallback, useEffect, useState } from 'react'
-import { ArrowLeft, BookOpen, Check, Code2, Cpu, Mic, Play, RotateCcw, Sparkles } from 'lucide-react'
-import IdeWorkspace from './IdeWorkspace'
-import ExaminerPanel from './ExaminerPanel'
+import { useEffect, useState } from 'react'
+import {
+  ArrowLeft,
+  BookOpen,
+  Code2,
+  FileCode2,
+  Loader2,
+  Lock,
+  Maximize2,
+  Play,
+  Search,
+  Sparkles,
+  Unlock,
+  User,
+  Zap,
+} from 'lucide-react'
+import LeetCodeWorkspace from './LeetCodeWorkspace'
 import ReportModal from './ReportModal'
-import { fetchReport, submitTurn, subscribeDemoMode } from '../services/apiClient'
-import type { CodingChallenge, IngestResponse, RepoFile, RunCodeResponse, TurnResponse, VivaReport } from '../types/api'
+import { fetchReport, ingestLeetCode } from '../services/apiClient'
+import type {
+  IngestLeetCodeResponse,
+  LeetCodeProfileData,
+  OAQuestion,
+  VivaReport,
+} from '../types/api'
+import { useProctor, ProctorStatusPill, triggerFullscreen } from '../context/ProctorContext'
 
-interface ProblemDef {
-  id: string
-  title: string
-  difficulty: 'Easy' | 'Medium' | 'Hard'
-  category: string
-  description: string
-  targetFile: string
-  starterCode: string
-  testCode: string
-  starterQuestion: string
-}
-
-const DSA_PROBLEMS: ProblemDef[] = [
+// Initial dynamic starter questions
+const INITIAL_OA_QUESTIONS: OAQuestion[] = [
   {
-    id: 'two-sum',
-    title: 'Two Sum & Optimization',
+    question_id: 'OA-1',
+    title: 'Distinct Value Distance Filter (Array & Hash Table)',
     difficulty: 'Easy',
-    category: 'Arrays & Hash Maps',
-    description:
-      'Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.\n\nYour solution must run in O(n) time complexity and handle negative numbers and duplicate values.',
-    targetFile: 'two_sum.py',
-    starterCode: `def two_sum(nums: list[int], target: int) -> list[int]:
-    """
-    Return indices of the two numbers such that they add up to target.
-    Assume exactly one solution exists.
-    """
-    # Write your O(n) solution here
-    seen = {}
-    for i, num in enumerate(nums):
-        complement = target - num
-        if complement in seen:
-            return [seen[complement], i]
-        seen[num] = i
-    return []
-`,
-    testCode: `from two_sum import two_sum
-
-def test_basic():
-    assert sorted(two_sum([2, 7, 11, 15], 9)) == [0, 1]
-
-def test_negative():
-    assert sorted(two_sum([-3, 4, 3, 90], 0)) == [0, 2]
-
-def test_duplicates():
-    assert sorted(two_sum([3, 3], 6)) == [0, 1]
-
-if __name__ == '__main__':
-    test_basic()
-    test_negative()
-    test_duplicates()
-    print("All tests passed!")
-`,
-    starterQuestion:
-      'Welcome to your DSA technical interview. We are looking at Two Sum. Walk me through your approach: what is the time and space complexity of your hash table lookup compared to a brute-force nested loop?',
+    topics: ['Array', 'Hash Table'],
+    selection_reason: 'Grounded in fundamental Array and Hash Table lookup patterns.',
+    problem_statement:
+      'Given an array of integers nums and an integer k, determine if there exist two distinct indices i and j such that nums[i] == nums[j] and abs(i - j) <= k.\n\n### Input Format\nFirst line: Two space-separated integers n and k.\nSecond line: n space-separated integers representing nums.\n\n### Output Format\nPrint true if such a pair exists, otherwise print false.',
+    examples: [
+      { input: '4 3\n1 2 3 1\n', output: 'true', explanation: 'nums[0] == nums[3] with index distance 3 <= 3.' },
+      { input: '6 2\n1 2 3 1 2 3\n', output: 'false', explanation: 'Minimum duplicate index distance is 3 > 2.' },
+    ],
+    constraints: ['1 <= n <= 10^5', '0 <= k <= 10^5', '-10^9 <= nums[i] <= 10^9'],
+    starter_templates: {
+      cpp: 'class Solution {\npublic:\n    bool containsNearbyDuplicate(vector<int>& nums, int k) {\n        \n    }\n};',
+      python: 'class Solution:\n    def containsNearbyDuplicate(self, nums: List[int], k: int) -> bool:\n        pass',
+      java: 'class Solution {\n    public boolean containsNearbyDuplicate(int[] nums, int k) {\n        \n    }\n}',
+      javascript: '/**\n * @param {number[]} nums\n * @param {number} k\n * @return {boolean}\n */\nvar containsNearbyDuplicate = function(nums, k) {\n    \n};',
+    },
+    driver_code: {
+      cpp: 'int main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    int n, k;\n    if (!(cin >> n >> k)) return 0;\n    vector<int> nums(n);\n    for (int i = 0; i < n; i++) cin >> nums[i];\n    Solution sol;\n    cout << (sol.containsNearbyDuplicate(nums, k) ? "true" : "false") << "\\n";\n    return 0;\n}',
+      python: "if __name__ == '__main__':\n    import sys\n    tokens = sys.stdin.read().split()\n    if tokens:\n        n = int(tokens[0])\n        k = int(tokens[1])\n        nums = [int(x) for x in tokens[2:2 + n]]\n        sol = Solution()\n        res = sol.containsNearbyDuplicate(nums, k)\n        print('true' if res else 'false')",
+      java: 'public class Main {\n    public static void main(String[] args) throws Exception {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int k = sc.nextInt();\n        int[] nums = new int[n];\n        for (int i = 0; i < n; i++) nums[i] = sc.nextInt();\n        Solution sol = new Solution();\n        boolean res = sol.containsNearbyDuplicate(nums, k);\n        System.out.println(res ? "true" : "false");\n    }\n}',
+      javascript: "const fs = require('fs');\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\s+/);\nif (tokens.length >= 2 && tokens[0] !== '') {\n    const n = parseInt(tokens[0], 10);\n    const k = parseInt(tokens[1], 10);\n    const nums = tokens.slice(2, 2 + n).map(Number);\n    const fn = typeof containsNearbyDuplicate === 'function' ? containsNearbyDuplicate : (typeof Solution !== 'undefined' ? new Solution().containsNearbyDuplicate : null);\n    const res = fn ? fn(nums, k) : false;\n    console.log(res ? 'true' : 'false');\n}",
+    },
+    test_cases: [
+      { stdin: '4 3\n1 2 3 1\n', expected_output: 'true', is_hidden: false },
+      { stdin: '6 2\n1 2 3 1 2 3\n', expected_output: 'false', is_hidden: false },
+      { stdin: '1 1\n100\n', expected_output: 'false', is_hidden: true },
+      { stdin: '5 1\n1 1 2 3 4\n', expected_output: 'true', is_hidden: true },
+      { stdin: '5 0\n1 1 2 3 4\n', expected_output: 'false', is_hidden: true },
+    ],
   },
   {
-    id: 'lru-cache',
-    title: 'LRU Cache Design',
+    question_id: 'OA-2',
+    title: 'Target Subarray Sum Parity (Hash Table & Dynamic Programming)',
     difficulty: 'Medium',
-    category: 'Linked List & Design',
-    description:
-      'Design a data structure that follows the constraints of a Least Recently Used (LRU) cache.\n\nImplement the LRUCache class with get(key) and put(key, value) operations in O(1) average time complexity.',
-    targetFile: 'lru_cache.py',
-    starterCode: `class Node:
-    def __init__(self, key: int = 0, val: int = 0):
-        self.key = key
-        self.val = val
-        self.prev = None
-        self.next = None
-
-class LRUCache:
-    def __init__(self, capacity: int):
-        self.capacity = capacity
-        self.cache = {}
-        self.head = Node()
-        self.tail = Node()
-        self.head.next = self.tail
-        self.tail.prev = self.head
-
-    def _remove(self, node: Node):
-        prev_node = node.prev
-        next_node = node.next
-        prev_node.next = next_node
-        next_node.prev = prev_node
-
-    def _add(self, node: Node):
-        node.prev = self.head
-        node.next = self.head.next
-        self.head.next.prev = node
-        self.head.next = node
-
-    def get(self, key: int) -> int:
-        if key in self.cache:
-            node = self.cache[key]
-            self._remove(node)
-            self._add(node)
-            return node.val
-        return -1
-
-    def put(self, key: int, value: int) -> None:
-        if key in self.cache:
-            self._remove(self.cache[key])
-        node = Node(key, value)
-        self._add(node)
-        self.cache[key] = node
-        if len(self.cache) > self.capacity:
-            lru = self.tail.prev
-            self._remove(lru)
-            del self.cache[lru.key]
-`,
-    testCode: `from lru_cache import LRUCache
-
-def test_lru():
-    cache = LRUCache(2)
-    cache.put(1, 1)
-    cache.put(2, 2)
-    assert cache.get(1) == 1
-    cache.put(3, 3) # evicts key 2
-    assert cache.get(2) == -1
-    cache.put(4, 4) # evicts key 1
-    assert cache.get(1) == -1
-    assert cache.get(3) == 3
-    assert cache.get(4) == 4
-
-if __name__ == '__main__':
-    test_lru()
-    print("LRU Cache tests passed!")
-`,
-    starterQuestion:
-      'We are discussing LRU Cache. Explain why a doubly-linked list paired with a hash map provides O(1) operations, and how you prevent memory leaks when evicting stale nodes.',
+    topics: ['Hash Table', 'Dynamic Programming'],
+    selection_reason: 'Combines Intermediate Hash Table and Advanced Dynamic Programming patterns.',
+    problem_statement:
+      'Given an integer array nums and an integer k, find the total number of continuous subarrays whose sum equals k and whose subarray length is an even number.\n\n### Input Format\nFirst line: Two space-separated integers n and k.\nSecond line: n space-separated integers representing nums.\n\n### Output Format\nPrint a single integer: the count of qualifying subarrays.',
+    examples: [
+      { input: '5 3\n1 2 1 2 1\n', output: '2', explanation: 'Subarrays [1, 2] and [2, 1] both sum to 3 with even length 2.' },
+      { input: '3 2\n1 1 1\n', output: '2', explanation: '[1, 1] at indices [0, 1] and [1, 2] are valid.' },
+    ],
+    constraints: ['1 <= n <= 2 * 10^4', '-1000 <= nums[i] <= 1000', '-10^7 <= k <= 10^7'],
+    starter_templates: {
+      cpp: 'class Solution {\npublic:\n    int subarraySumEven(vector<int>& nums, int k) {\n        \n    }\n};',
+      python: 'class Solution:\n    def subarraySumEven(self, nums: List[int], k: int) -> int:\n        pass',
+      java: 'class Solution {\n    public int subarraySumEven(int[] nums, int k) {\n        \n    }\n}',
+      javascript: '/**\n * @param {number[]} nums\n * @param {number} k\n * @return {number}\n */\nvar subarraySumEven = function(nums, k) {\n    \n};',
+    },
+    driver_code: {
+      cpp: 'int main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    int n, k;\n    if (!(cin >> n >> k)) return 0;\n    vector<int> nums(n);\n    for (int i = 0; i < n; i++) cin >> nums[i];\n    Solution sol;\n    cout << sol.subarraySumEven(nums, k) << "\\n";\n    return 0;\n}',
+      python: "if __name__ == '__main__':\n    import sys\n    tokens = sys.stdin.read().split()\n    if tokens:\n        n = int(tokens[0])\n        k = int(tokens[1])\n        nums = [int(x) for x in tokens[2:2 + n]]\n        sol = Solution()\n        print(sol.subarraySumEven(nums, k))",
+      java: 'public class Main {\n    public static void main(String[] args) throws Exception {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int k = sc.nextInt();\n        int[] nums = new int[n];\n        for (int i = 0; i < n; i++) nums[i] = sc.nextInt();\n        Solution sol = new Solution();\n        System.out.println(sol.subarraySumEven(nums, k));\n    }\n}',
+      javascript: "const fs = require('fs');\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\s+/);\nif (tokens.length >= 2 && tokens[0] !== '') {\n    const n = parseInt(tokens[0], 10);\n    const k = parseInt(tokens[1], 10);\n    const nums = tokens.slice(2, 2 + n).map(Number);\n    const fn = typeof subarraySumEven === 'function' ? subarraySumEven : (typeof Solution !== 'undefined' ? new Solution().subarraySumEven : null);\n    console.log(fn ? fn(nums, k) : 0);\n}",
+    },
+    test_cases: [
+      { stdin: '5 3\n1 2 1 2 1\n', expected_output: '2', is_hidden: false },
+      { stdin: '3 2\n1 1 1\n', expected_output: '2', is_hidden: false },
+      { stdin: '1 5\n5\n', expected_output: '0', is_hidden: true },
+      { stdin: '4 0\n0 0 0 0\n', expected_output: '4', is_hidden: true },
+    ],
   },
   {
-    id: 'num-islands',
-    title: 'Number of Islands',
+    question_id: 'OA-3',
+    title: 'Longest Continuous Subarray with Absolute Difference Limit',
     difficulty: 'Medium',
-    category: 'Graphs / BFS & DFS',
-    description:
-      'Given an m x n 2D binary grid grid which represents a map of 1s (land) and 0s (water), return the number of islands.\n\nAn island is surrounded by water and is formed by connecting adjacent lands horizontally or vertically.',
-    targetFile: 'num_islands.py',
-    starterCode: `def num_islands(grid: list[list[str]]) -> int:
-    """
-    Counts the number of connected 1s in a 2D grid.
-    """
-    if not grid:
-        return 0
-
-    rows, cols = len(grid), len(grid[0])
-    islands = 0
-
-    def dfs(r: int, c: int):
-        if r < 0 or c < 0 or r >= rows or c >= cols or grid[r][c] != '1':
-            return
-        grid[r][c] = '0'  # mark visited
-        dfs(r + 1, c)
-        dfs(r - 1, c)
-        dfs(r, c + 1)
-        dfs(r, c - 1)
-
-    for r in range(rows):
-        for c in range(cols):
-            if grid[r][c] == '1':
-                islands += 1
-                dfs(r, c)
-
-    return islands
-`,
-    testCode: `from num_islands import num_islands
-
-def test_single_island():
-    grid = [
-        ["1","1","1","1","0"],
-        ["1","1","0","1","0"],
-        ["1","1","0","0","0"],
-        ["0","0","0","0","0"]
-    ]
-    assert num_islands(grid) == 1
-
-def test_multiple_islands():
-    grid = [
-        ["1","1","0","0","0"],
-        ["1","1","0","0","0"],
-        ["0","0","1","0","0"],
-        ["0","0","0","1","1"]
-    ]
-    assert num_islands(grid) == 3
-
-if __name__ == '__main__':
-    test_single_island()
-    test_multiple_islands()
-    print("Graph tests passed!")
-`,
-    starterQuestion:
-      'For the Number of Islands problem, what is the recursion stack depth in the worst case, and how would you adapt this solution to avoid stack overflow when grid dimensions scale up to 10^5?',
+    topics: ['Sliding Window', 'Queue', 'Monotonic Stack'],
+    selection_reason: 'Tests claimed Advanced Monotonic Stack / Queue competencies.',
+    problem_statement:
+      'Given an array of integers nums and an integer limit, return the size of the longest non-empty subarray such that the absolute difference between any two elements of this subarray is less than or equal to limit.\n\n### Input Format\nFirst line: Two space-separated integers n and limit.\nSecond line: n space-separated integers representing nums.\n\n### Output Format\nPrint a single integer representing the maximum valid subarray length.',
+    examples: [
+      { input: '4 4\n8 2 4 7\n', output: '2', explanation: 'Subarray [2, 4] has max-min = 4-2 = 2 <= 4.' },
+      { input: '6 5\n10 1 2 4 7 2\n', output: '4', explanation: 'Subarray [2, 4, 7, 2] has max-min = 7-2 = 5 <= 5.' },
+    ],
+    constraints: ['1 <= n <= 10^5', '1 <= nums[i] <= 10^9', '0 <= limit <= 10^9'],
+    starter_templates: {
+      cpp: 'class Solution {\npublic:\n    int longestSubarray(vector<int>& nums, int limit) {\n        \n    }\n};',
+      python: 'class Solution:\n    def longestSubarray(self, nums: List[int], limit: int) -> int:\n        pass',
+      java: 'class Solution {\n    public int longestSubarray(int[] nums, int limit) {\n        \n    }\n}',
+      javascript: '/**\n * @param {number[]} nums\n * @param {number} limit\n * @return {number}\n */\nvar longestSubarray = function(nums, limit) {\n    \n};',
+    },
+    driver_code: {
+      cpp: 'int main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    int n, limit;\n    if (!(cin >> n >> limit)) return 0;\n    vector<int> nums(n);\n    for (int i = 0; i < n; i++) cin >> nums[i];\n    Solution sol;\n    cout << sol.longestSubarray(nums, limit) << "\\n";\n    return 0;\n}',
+      python: "if __name__ == '__main__':\n    import sys\n    tokens = sys.stdin.read().split()\n    if tokens:\n        n = int(tokens[0])\n        limit = int(tokens[1])\n        nums = [int(x) for x in tokens[2:2 + n]]\n        sol = Solution()\n        print(sol.longestSubarray(nums, limit))",
+      java: 'public class Main {\n    public static void main(String[] args) throws Exception {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int limit = sc.nextInt();\n        int[] nums = new int[n];\n        for (int i = 0; i < n; i++) nums[i] = sc.nextInt();\n        Solution sol = new Solution();\n        System.out.println(sol.longestSubarray(nums, limit));\n    }\n}',
+      javascript: "const fs = require('fs');\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\s+/);\nif (tokens.length >= 2 && tokens[0] !== '') {\n    const n = parseInt(tokens[0], 10);\n    const limit = parseInt(tokens[1], 10);\n    const nums = tokens.slice(2, 2 + n).map(Number);\n    const fn = typeof longestSubarray === 'function' ? longestSubarray : (typeof Solution !== 'undefined' ? new Solution().longestSubarray : null);\n    console.log(fn ? fn(nums, limit) : 0);\n}",
+    },
+    test_cases: [
+      { stdin: '4 4\n8 2 4 7\n', expected_output: '2', is_hidden: false },
+      { stdin: '6 5\n10 1 2 4 7 2\n', expected_output: '4', is_hidden: false },
+      { stdin: '1 0\n5\n', expected_output: '1', is_hidden: true },
+      { stdin: '5 0\n3 3 3 3 3\n', expected_output: '5', is_hidden: true },
+    ],
   },
   {
-    id: 'coin-change',
-    title: 'Coin Change (Min Coins)',
-    difficulty: 'Medium',
-    category: 'Dynamic Programming',
-    description:
-      'You are given an integer array coins representing coins of different denominations and an integer amount.\n\nReturn the fewest number of coins that you need to make up that amount. If that amount cannot be made up by any combination, return -1.',
-    targetFile: 'coin_change.py',
-    starterCode: `def coin_change(coins: list[int], amount: int) -> int:
-    """
-    Returns fewest coins to make up the target amount.
-    """
-    dp = [float('inf')] * (amount + 1)
-    dp[0] = 0
-
-    for a in range(1, amount + 1):
-        for c in coins:
-            if a - c >= 0:
-                dp[a] = min(dp[a], 1 + dp[a - c])
-
-    return dp[amount] if dp[amount] != float('inf') else -1
-`,
-    testCode: `from coin_change import coin_change
-
-def test_basic():
-    assert coin_change([1, 2, 5], 11) == 3
-
-def test_impossible():
-    assert coin_change([2], 3) == -1
-
-def test_zero():
-    assert coin_change([1], 0) == 0
-
-if __name__ == '__main__':
-    test_basic()
-    test_impossible()
-    test_zero()
-    print("DP tests passed!")
-`,
-    starterQuestion:
-      'Analyze the recurrence relation in your Coin Change dynamic programming solution: what are the subproblem dependencies, and how does the time complexity depend on both the amount and number of denominations?',
+    question_id: 'OA-4',
+    title: 'Redundant Cycle Edge Elimination (Union-Find & Graph)',
+    difficulty: 'Hard',
+    topics: ['Union-Find', 'Graph', 'Tree'],
+    selection_reason: 'Stress-tests candidate strength in Union-Find and cyclic graph algorithms.',
+    problem_statement:
+      'Given an undirected graph with n vertices labeled 1 to n and n edges, find an edge that can be removed so that the resulting graph is a tree of n nodes. If multiple answers exist, return the edge that occurs last in the input.\n\n### Input Format\nFirst line: Integer n.\nNext n lines: Two space-separated integers u and v.\n\n### Output Format\nPrint two space-separated integers representing the redundant edge.',
+    examples: [
+      { input: '3\n1 2\n1 3\n2 3\n', output: '2 3', explanation: 'Edge [2, 3] creates the cycle.' },
+      { input: '5\n1 2\n2 3\n3 4\n1 4\n1 5\n', output: '1 4', explanation: 'Edge [1, 4] completes redundant cycle.' },
+    ],
+    constraints: ['3 <= n <= 1000', '1 <= u < v <= n'],
+    starter_templates: {
+      cpp: 'class Solution {\npublic:\n    vector<int> findRedundantConnection(vector<vector<int>>& edges) {\n        \n    }\n};',
+      python: 'class Solution:\n    def findRedundantConnection(self, edges: List[List[int]]) -> List[int]:\n        pass',
+      java: 'class Solution {\n    public int[] findRedundantConnection(int[][] edges) {\n        \n    }\n}',
+      javascript: '/**\n * @param {number[][]} edges\n * @return {number[]}\n */\nvar findRedundantConnection = function(edges) {\n    \n};',
+    },
+    driver_code: {
+      cpp: 'int main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    int n;\n    if (!(cin >> n)) return 0;\n    vector<vector<int>> edges(n, vector<int>(2));\n    for (int i = 0; i < n; i++) cin >> edges[i][0] >> edges[i][1];\n    Solution sol;\n    vector<int> res = sol.findRedundantConnection(edges);\n    if (res.size() >= 2) cout << res[0] << " " << res[1] << "\\n";\n    return 0;\n}',
+      python: "if __name__ == '__main__':\n    import sys\n    tokens = sys.stdin.read().split()\n    if tokens:\n        n = int(tokens[0])\n        edges = []\n        idx = 1\n        for _ in range(n):\n            edges.append([int(tokens[idx]), int(tokens[idx + 1])])\n            idx += 2\n        sol = Solution()\n        res = sol.findRedundantConnection(edges)\n        print(f'{res[0]} {res[1]}')",
+      java: 'public class Main {\n    public static void main(String[] args) throws Exception {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int[][] edges = new int[n][2];\n        for (int i = 0; i < n; i++) { edges[i][0] = sc.nextInt(); edges[i][1] = sc.nextInt(); }\n        Solution sol = new Solution();\n        int[] res = sol.findRedundantConnection(edges);\n        System.out.println(res[0] + " " + res[1]);\n    }\n}',
+      javascript: "const fs = require('fs');\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\s+/);\nif (tokens.length >= 1 && tokens[0] !== '') {\n    const n = parseInt(tokens[0], 10);\n    const edges = [];\n    let idx = 1;\n    for (let i = 0; i < n; i++) { edges.push([Number(tokens[idx]), Number(tokens[idx + 1])]); idx += 2; }\n    const fn = typeof findRedundantConnection === 'function' ? findRedundantConnection : (typeof Solution !== 'undefined' ? new Solution().findRedundantConnection : null);\n    const res = fn ? fn(edges) : [0, 0];\n    console.log(`${res[0]} ${res[1]}`);\n}",
+    },
+    test_cases: [
+      { stdin: '3\n1 2\n1 3\n2 3\n', expected_output: '2 3', is_hidden: false },
+      { stdin: '5\n1 2\n2 3\n3 4\n1 4\n1 5\n', expected_output: '1 4', is_hidden: false },
+      { stdin: '4\n1 2\n2 3\n3 4\n1 4\n', expected_output: '1 4', is_hidden: true },
+    ],
+  },
+  {
+    question_id: 'OA-5',
+    title: 'Constrained Sequence Permutation Inversion Count (DP & Combinatorics)',
+    difficulty: 'Hard',
+    topics: ['Dynamic Programming', 'Combinatorics'],
+    selection_reason: 'Peak stress-test evaluating candidate Dynamic Programming mastery.',
+    problem_statement:
+      'For integers n and k, count the number of different permutations of numbers from 1 to n such that there are exactly k inverse pairs. Print the result modulo 10^9 + 7.\n\n### Input Format\nSingle line with two space-separated integers n and k.\n\n### Output Format\nPrint a single integer: the count of valid permutations modulo 10^9 + 7.',
+    examples: [
+      { input: '3 0\n', output: '1', explanation: 'Only [1, 2, 3] has 0 inverse pairs.' },
+      { input: '3 1\n', output: '2', explanation: '[1, 3, 2] and [2, 1, 3] each have 1 inverse pair.' },
+    ],
+    constraints: ['1 <= n <= 1000', '0 <= k <= 1000'],
+    starter_templates: {
+      cpp: 'class Solution {\npublic:\n    int kInversePairs(int n, int k) {\n        \n    }\n};',
+      python: 'class Solution:\n    def kInversePairs(self, n: int, k: int) -> int:\n        pass',
+      java: 'class Solution {\n    public int kInversePairs(int n, int k) {\n        \n    }\n}',
+      javascript: '/**\n * @param {number} n\n * @param {number} k\n * @return {number}\n */\nvar kInversePairs = function(n, k) {\n    \n};',
+    },
+    driver_code: {
+      cpp: 'int main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    int n, k;\n    if (!(cin >> n >> k)) return 0;\n    Solution sol;\n    cout << sol.kInversePairs(n, k) << "\\n";\n    return 0;\n}',
+      python: "if __name__ == '__main__':\n    import sys\n    tokens = sys.stdin.read().split()\n    if tokens:\n        n = int(tokens[0])\n        k = int(tokens[1])\n        sol = Solution()\n        print(sol.kInversePairs(n, k))",
+      java: 'public class Main {\n    public static void main(String[] args) throws Exception {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int k = sc.nextInt();\n        Solution sol = new Solution();\n        System.out.println(sol.kInversePairs(n, k));\n    }\n}',
+      javascript: "const fs = require('fs');\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\s+/);\nif (tokens.length >= 2 && tokens[0] !== '') {\n    const n = parseInt(tokens[0], 10);\n    const k = parseInt(tokens[1], 10);\n    const fn = typeof kInversePairs === 'function' ? kInversePairs : (typeof Solution !== 'undefined' ? new Solution().kInversePairs : null);\n    console.log(fn ? fn(n, k) : 0);\n}",
+    },
+    test_cases: [
+      { stdin: '3 0\n', expected_output: '1', is_hidden: false },
+      { stdin: '3 1\n', expected_output: '2', is_hidden: false },
+      { stdin: '1 0\n', expected_output: '1', is_hidden: true },
+      { stdin: '4 2\n', expected_output: '5', is_hidden: true },
+    ],
   },
 ]
 
@@ -254,153 +208,101 @@ interface Props {
 }
 
 export default function DsaPage({ onBack }: Props) {
-  const [selectedProb, setSelectedProb] = useState<ProblemDef>(DSA_PROBLEMS[0])
-  const [session, setSession] = useState<IngestResponse | null>(null)
-  const [pendingFirstTurn, setPendingFirstTurn] = useState<TurnResponse | null>(null)
-  const [turn, setTurn] = useState<TurnResponse | null>(null)
-  const [history, setHistory] = useState<TurnResponse[]>([])
-  const [busy, setBusy] = useState(false)
-  const [demo, setDemo] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // LeetCode Profile Ingestion State (blank by default)
+  const [lcInput, setLcInput] = useState('')
+  const [ingesting, setIngesting] = useState(false)
+  const [ingestError, setIngestError] = useState<string | null>(null)
+  const [profileData, setProfileData] = useState<LeetCodeProfileData | null>(null)
+  const [generatedOaQuestions, setGeneratedOaQuestions] = useState<OAQuestion[]>(INITIAL_OA_QUESTIONS)
+  const [activeQuestionIdx, setActiveQuestionIdx] = useState<number>(0)
+
+  // Active Assessment Session
+  const [oaSessionId, setOaSessionId] = useState<string | null>(null)
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [solvedMap, setSolvedMap] = useState<Record<string, boolean>>({})
+
+  // Report Modal State
   const [showReport, setShowReport] = useState(false)
   const [report, setReport] = useState<VivaReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
+  const { startProctoredSession, endProctoredSession, isFullscreen, terminatedDueToViolation } = useProctor()
 
-  useEffect(() => subscribeDemoMode(setDemo), [])
-
-  const startProblem = (prob: ProblemDef) => {
-    setBusy(true)
-    setError(null)
-    const sessionId = `dsa_${prob.id}_${Date.now()}`
-
-    const files: RepoFile[] = [
-      {
-        path: prob.targetFile,
-        content: prob.starterCode,
-        language: 'python',
-      },
-      {
-        path: 'README.md',
-        content: `# ${prob.title}\n\n**Category:** ${prob.category}  \n**Difficulty:** ${prob.difficulty}\n\n${prob.description}\n`,
-        language: 'markdown',
-      },
-      {
-        path: 'test_solution.py',
-        content: prob.testCode,
-        language: 'python',
-      },
-    ]
-
-    const challenge: CodingChallenge = {
-      description: prob.description,
-      target_file: prob.targetFile,
-      starter_code: prob.starterCode,
-      test_code: prob.testCode,
+  // On anti-plagiarism violation (exiting fullscreen), immediately end OA compiler session
+  useEffect(() => {
+    if (terminatedDueToViolation) {
+      setActiveSessionId(null)
     }
+  }, [terminatedDueToViolation])
 
-    const firstTurn: TurnResponse = {
-      session_id: sessionId,
-      student_transcript: '',
-      verdict: 'start',
-      ack_text: `Let's tackle the ${prob.title} problem.`,
-      question_text: prob.starterQuestion,
-      audio_base64: '',
-      topic: prob.category,
-      depth_level: 2,
-      highlight: {
-        file_path: prob.targetFile,
-        line_start: 1,
-        line_end: 15,
-      },
-      coding_challenge: challenge,
-      done: false,
+  // Ingest LeetCode Profile via live FastAPI /api/ingest-leetcode
+  const handleIngestLeetCode = async (usernameOrUrl: string) => {
+    if (!usernameOrUrl.trim()) return
+    setIngesting(true)
+    setIngestError(null)
+    try {
+      const res: IngestLeetCodeResponse = await ingestLeetCode(usernameOrUrl.trim(), 1, 2, 2)
+      setProfileData(res.profile)
+      if (res.oa_questions && res.oa_questions.length > 0) {
+        setGeneratedOaQuestions(res.oa_questions)
+      }
+      setOaSessionId(res.session_id)
+    } catch (e) {
+      setIngestError(e instanceof Error ? e.message : 'Failed to ingest LeetCode profile.')
+    } finally {
+      setIngesting(false)
     }
-
-    const sess: IngestResponse = {
-      session_id: sessionId,
-      mode: 'repo',
-      files,
-      authors: ['Student'],
-      paper: null,
-      first_turn: firstTurn,
-    }
-
-    setSession(sess)
-    setPendingFirstTurn(firstTurn)
-    setTurn(null)
-    setHistory([])
-    setReport(null)
-    setBusy(false)
   }
 
-  const startViva = useCallback(() => {
-    if (!pendingFirstTurn) return
-    setTurn(pendingFirstTurn)
-    setHistory([pendingFirstTurn])
-    setPendingFirstTurn(null)
-  }, [pendingFirstTurn])
-
-  const onTurn = useCallback((t: TurnResponse) => {
-    setTurn(t)
-    setHistory(h => [...h, t])
-  }, [])
-
-  const onRunResult = (res: RunCodeResponse) => {
-    if (!session) return
-    setBusy(true)
-    submitTurn({ session_id: session.session_id, code_result: res })
-      .then(t => onTurn(t))
-      .catch(e => {
-        // Fallback simulated turn if backend isn't bound to this synthetic session
-        const nextTurn: TurnResponse = {
-          session_id: session.session_id,
-          student_transcript: res.passed ? 'Code executed successfully and all test assertions passed.' : 'Tests encountered errors.',
-          verdict: res.passed ? 'strong' : 'partial',
-          ack_text: res.passed ? 'Great job! Your implementation passed the initial test suite.' : 'Some test cases did not pass yet. Check your edge cases.',
-          question_text: res.passed
-            ? 'Now, what is the asymptotic time and space complexity of your implementation? Could you optimize space if memory was severely constrained?'
-            : 'Look at the test failure output below. What assumption about the inputs might have failed, and how will you fix it?',
-          audio_base64: '',
-          topic: selectedProb.category,
-          depth_level: res.passed ? 3 : 2,
-          coding_challenge: turn?.coding_challenge,
-          done: false,
-        }
-        onTurn(nextTurn)
-      })
-      .finally(() => setBusy(false))
+  // Open a specific question in the LeetCode Compiler Screen
+  const launchQuestion = (idx: number) => {
+    // 1. Synchronously trigger fullscreen as line 1
+    triggerFullscreen()
+    setActiveQuestionIdx(idx)
+    const sid = oaSessionId || activeSessionId || `oa_${Date.now()}`
+    setActiveSessionId(sid)
+    startProctoredSession(sid)
   }
 
-  async function finish() {
-    if (!session) return
+  const markQuestionSolved = (qid: string) => {
+    setSolvedMap(prev => ({ ...prev, [qid]: true }))
+  }
+
+  async function finishAssessment() {
+    if (!activeSessionId) return
+    const sid = activeSessionId
+    await endProctoredSession()
+    setActiveSessionId(null)
     setShowReport(true)
     setReportLoading(true)
     setReportError(null)
     try {
-      setReport(await fetchReport(session.session_id))
+      setReport(await fetchReport(sid))
     } catch {
-      // Synthetic report if backend report endpoint fails
+      const solvedCount = Object.values(solvedMap).filter(Boolean).length
       setReport({
-        session_id: session.session_id,
-        overall_score: 88,
+        session_id: sid,
+        overall_score: Math.min(100, Math.max(60, 60 + solvedCount * 8)),
         rubric: {
           clarity: 90,
-          tradeoffs: 85,
-          edge_cases: 85,
-          code_execution: 95,
-          depth: 85,
+          tradeoffs: 88,
+          edge_cases: 92,
+          code_execution: solvedCount > 0 ? 95 : 70,
+          depth: 88,
         },
         topic_depth: [
-          { topic: 'Complexity Analysis', level: 3 },
-          { topic: 'Data Structure Invariants', level: 4 },
-          { topic: 'Edge Case Validation', level: 3 },
-          { topic: 'Code Correctness', level: 4 },
+          { topic: 'Dynamic Programming', level: 4 },
+          { topic: 'Data Structures & Arrays', level: 4 },
+          { topic: 'Edge Case Verification', level: 3 },
+          { topic: 'Asymptotic Complexity', level: 4 },
         ],
-        challenges: [{ description: selectedProb.title, passed: true }],
+        challenges: generatedOaQuestions.map(q => ({
+          description: q.title,
+          passed: !!solvedMap[q.question_id],
+        })),
         study_plan: [
-          'Review space-time trade-offs for auxiliary caching structures.',
-          'Practice explaining recursion tree depth clearly during mock interviews.',
+          'Review space-time trade-offs for auxiliary caching and monotonic deque sweeps.',
+          'Practice explaining recursion tree depth and subproblem memoization invariants.',
         ],
         fluency_weight: 0,
       })
@@ -410,13 +312,24 @@ export default function DsaPage({ onBack }: Props) {
   }
 
   function handleBack() {
-    if (session && !window.confirm('Leave this DSA session? Progress is lost unless you press Finish first.')) return
+    if (activeSessionId) {
+      // Exit compiler workspace back to OA questions overview
+      if (!window.confirm('Leave active OA question? Exiting full screen will end the proctored assessment.')) {
+        return
+      }
+      endProctoredSession().catch(() => {})
+      setActiveSessionId(null)
+      return
+    }
+    endProctoredSession().catch(() => {})
     onBack()
   }
 
+  const activeQ = generatedOaQuestions[activeQuestionIdx] || generatedOaQuestions[0]
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--color-chalk-canvas)' }}>
-      {/* ── Top Nav ── */}
+      {/* ── Top Navigation Bar ── */}
       <header
         style={{
           background: 'var(--color-paper-white)',
@@ -454,12 +367,12 @@ export default function DsaPage({ onBack }: Props) {
               borderRadius: 4,
             }}
           >
-            <ArrowLeft className="h-4 w-4" /> Home
+            <ArrowLeft className="h-4 w-4" /> {activeSessionId ? 'Back to OA Questions' : 'Home'}
           </button>
 
           {/* Brand */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Mic className="h-5 w-5" style={{ color: 'var(--color-iris-bolt)' }} strokeWidth={2} />
+            <Code2 className="h-5 w-5" style={{ color: 'var(--color-iris-bolt)' }} strokeWidth={2.2} />
             <span style={{ fontWeight: 700, fontSize: 17, color: 'var(--color-iris-bolt)' }}>VivaVoce</span>
           </div>
 
@@ -477,141 +390,394 @@ export default function DsaPage({ onBack }: Props) {
             DSA / OA Prep
           </span>
 
-          {/* Problem Selector */}
-          <select
-            value={selectedProb.id}
-            onChange={e => {
-              const p = DSA_PROBLEMS.find(item => item.id === e.target.value)
-              if (p) {
-                setSelectedProb(p)
-                if (session) startProblem(p)
-              }
-            }}
-            disabled={busy}
-            style={{
-              background: 'var(--color-chalk-canvas)',
-              border: '1px solid var(--color-mist-border)',
-              borderRadius: 4,
-              padding: '6px 12px',
-              fontSize: 13,
-              fontWeight: 600,
-              color: 'var(--color-ink-charcoal)',
-              cursor: 'pointer',
-            }}
-          >
-            {DSA_PROBLEMS.map(p => (
-              <option key={p.id} value={p.id}>
-                {p.title} ({p.difficulty} · {p.category})
-              </option>
-            ))}
-          </select>
+          <ProctorStatusPill />
+
+          {/* In Compiler Workspace: Question Switcher Dropdown */}
+          {activeSessionId && generatedOaQuestions.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <select
+                value={activeQuestionIdx}
+                onChange={e => setActiveQuestionIdx(Number(e.target.value))}
+                style={{
+                  background: 'var(--color-chalk-canvas)',
+                  border: '1px solid var(--color-mist-border)',
+                  borderRadius: 6,
+                  padding: '6px 12px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: 'var(--color-ink-charcoal)',
+                  cursor: 'pointer',
+                }}
+              >
+                {generatedOaQuestions.map((q, idx) => (
+                  <option key={q.question_id} value={idx}>
+                    {q.question_id}: {q.title} ({q.difficulty} · {q.topics[0]}) {solvedMap[q.question_id] ? '✓' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Actions */}
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-            {!session ? (
+            {!activeSessionId ? (
               <button
+                type="button"
                 className="btn-primary"
-                onClick={() => startProblem(selectedProb)}
-                disabled={busy}
+                onClick={() => {
+                  triggerFullscreen()
+                  launchQuestion(0)
+                }}
+                disabled={ingesting}
                 style={{ padding: '8px 20px', fontSize: 14, background: '#0891b2' }}
               >
-                <Play className="h-4 w-4" /> Start OA Round
+                <Play className="h-4 w-4" /> Start OA Round (Q1)
               </button>
             ) : (
               <button
-                className="btn-outline"
-                onClick={() => startProblem(selectedProb)}
-                disabled={busy}
+                className="btn-primary"
+                onClick={finishAssessment}
+                style={{ padding: '8px 18px', fontSize: 14 }}
               >
-                <RotateCcw className="h-4 w-4" /> Reset Problem
+                Finish Assessment
               </button>
             )}
-
-            <button
-              className="btn-primary"
-              onClick={finish}
-              disabled={!session || busy}
-              style={{ padding: '8px 16px', fontSize: 14 }}
-            >
-              Finish viva
-            </button>
           </div>
         </div>
       </header>
 
       {/* Error banner */}
-      {error && (
+      {ingestError && (
         <div
           role="alert"
           style={{
             borderBottom: '1px solid #fca5a5',
             background: '#fef2f2',
             padding: '8px 16px',
-            fontSize: 14,
+            fontSize: 13,
             color: '#dc2626',
           }}
         >
-          {error}
+          {ingestError}
         </div>
       )}
 
-      {/* Content */}
-      {!session ? (
-        <DsaLanding
-          selectedProb={selectedProb}
-          onSelectProblem={p => setSelectedProb(p)}
-          onStart={startProblem}
-          busy={busy}
-        />
-      ) : (
-        <main
-          style={{
-            display: 'flex',
-            flex: 1,
-            minHeight: 0,
-            maxWidth: 1440,
-            margin: '0 auto',
-            width: '100%',
-          }}
-        >
-          <section
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              flex: '0 0 65%',
-              minWidth: 0,
-              padding: 12,
-              gap: 8,
-            }}
-          >
-            <IdeWorkspace
-              key={session.session_id}
-              sessionId={session.session_id}
-              files={session.files}
-              highlight={turn?.highlight}
-              incomingChallenge={turn?.coding_challenge}
-              onRunResult={onRunResult}
-            />
-          </section>
+      {/* ── Main View: Landing Page OR 2-Column Split-Screen OA Workspace ── */}
+      {!activeSessionId ? (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '36px 24px' }}>
+          <div style={{ maxWidth: 1040, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 28 }}>
+            {/* Header */}
+            <div style={{ textAlign: 'center' }}>
+              <div
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 16,
+                  background: 'var(--color-pastel-cyan)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: '0 auto 12px',
+                }}
+              >
+                <BookOpen className="h-6 w-6" style={{ color: '#0891b2' }} strokeWidth={1.75} />
+              </div>
+              <h1 style={{ margin: '0 0 8px', fontSize: 32, fontWeight: 700, color: 'var(--color-ink-charcoal)' }}>
+                DSA &amp; Online Assessment Prep
+              </h1>
+              <p style={{ margin: 0, fontSize: 15, color: 'var(--color-slate-veil)', maxWidth: 660, marginInline: 'auto' }}>
+                Generate customized, adaptive 5-question technical assessments tailored to any LeetCode candidate profile
+                and solve them inside an isolated multi-language code sandbox.
+              </p>
+            </div>
 
-          <aside
-            style={{
-              flex: '0 0 35%',
-              minWidth: 0,
-              borderLeft: '1px solid var(--color-mist-border)',
-              background: 'var(--color-paper-white)',
-            }}
-          >
-            <ExaminerPanel
-              sessionId={session.session_id}
-              mode={session.mode}
-              turn={turn}
-              history={history}
-              busy={busy}
-              onTurn={onTurn}
-              onStartViva={startViva}
-            />
-          </aside>
+            {/* ── 1. LEETCODE PROFILE INGESTION BOX ── */}
+            <div
+              style={{
+                background: 'var(--color-paper-white)',
+                border: '1.5px solid var(--color-mist-border)',
+                borderRadius: 16,
+                padding: 24,
+                boxShadow: 'var(--shadow-card)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 16,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 10,
+                    background: '#fef3c7',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#d97706',
+                  }}
+                >
+                  <Zap className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: 'var(--color-ink-charcoal)' }}>
+                    Adaptive OA Generator via LeetCode Profile
+                  </h2>
+                  <p style={{ margin: 0, fontSize: 13, color: 'var(--color-slate-veil)' }}>
+                    Enter any LeetCode username or profile URL. VivaVoce classifies candidate telemetry and dynamically
+                    synthesizes 5 tailored OA challenges weighted by their claimed tags and solved questions.
+                  </p>
+                </div>
+              </div>
+
+              {/* Input & Quick Fill */}
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flex: 1,
+                    minWidth: 280,
+                    background: 'var(--color-chalk-canvas)',
+                    border: '1px solid var(--color-mist-border)',
+                    borderRadius: 8,
+                    padding: '10px 14px',
+                  }}
+                >
+                  <Search className="h-4 w-4 text-fog-mist shrink-0" />
+                  <input
+                    value={lcInput}
+                    onChange={e => setLcInput(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && !ingesting && handleIngestLeetCode(lcInput)}
+                    placeholder="https://leetcode.com/u/user_id"
+                    style={{
+                      flex: 1,
+                      background: 'transparent',
+                      border: 'none',
+                      outline: 'none',
+                      fontSize: 14,
+                      color: 'var(--color-ink-charcoal)',
+                    }}
+                  />
+                </div>
+
+                <button
+                  onClick={() => handleIngestLeetCode(lcInput)}
+                  disabled={ingesting || !lcInput.trim()}
+                  className="btn-primary"
+                  style={{ background: '#0891b2', padding: '10px 24px', fontSize: 14 }}
+                >
+                  {ingesting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Ingesting Telemetry…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4" /> Ingest &amp; Generate OA
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Telemetry Profile Card if loaded */}
+              {profileData && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    background: 'var(--color-chalk-canvas)',
+                    border: '1px solid var(--color-mist-border)',
+                    borderRadius: 12,
+                    padding: 18,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <User className="h-5 w-5 text-iris-bolt" />
+                      <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-ink-charcoal)' }}>
+                        @{profileData.username}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '2px 10px',
+                          borderRadius: 200,
+                          background: profileData.category === 'PUBLIC_SOLVED_LIST' ? '#dcfce7' : '#fef3c7',
+                          color: profileData.category === 'PUBLIC_SOLVED_LIST' ? '#15803d' : '#b45309',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}
+                      >
+                        {profileData.category === 'PUBLIC_SOLVED_LIST' ? (
+                          <>
+                            <Unlock className="h-3 w-3" /> PUBLIC SOLVED LIST (Mutations)
+                          </>
+                        ) : (
+                          <>
+                            <Lock className="h-3 w-3" /> HIDDEN LIST (Tier-Weighted)
+                          </>
+                        )}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className="rounded bg-paper-white border border-mist-border px-2.5 py-1 text-xs font-semibold text-slate-veil">
+                        Primary Lang: <strong>{profileData.primary_language}</strong>
+                      </span>
+                      <span className="rounded bg-paper-white border border-mist-border px-2.5 py-1 text-xs font-semibold text-slate-veil">
+                        Total Solved: <strong>{profileData.total_solved}</strong> (E: {profileData.easy_solved}, M:{' '}
+                        {profileData.medium_solved}, H: {profileData.hard_solved})
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Tag breakdown chips */}
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-slate-veil)' }}>Top Skills:</span>
+                    {profileData.skill_tags.slice(0, 8).map(tag => (
+                      <span
+                        key={tag.tag_name}
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          background:
+                            tag.tier === 'Advanced' ? '#f3e8ff' : tag.tier === 'Intermediate' ? '#e0f2fe' : '#f1f5f9',
+                          color:
+                            tag.tier === 'Advanced' ? '#7e22ce' : tag.tier === 'Intermediate' ? '#0369a1' : '#334155',
+                        }}
+                      >
+                        {tag.tag_name} ×{tag.problems_solved} ({tag.tier[0]})
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── 2. TAILORED 5-QUESTION ADAPTIVE OA ASSESSMENT ── */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                <div>
+                  <h2 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700, color: 'var(--color-ink-charcoal)' }}>
+                    Tailored 5-Question Adaptive OA Round
+                  </h2>
+                  <p style={{ margin: 0, fontSize: 13, color: 'var(--color-slate-veil)' }}>
+                    Each question redirects directly to the LeetCode multi-language compiler with dynamic testcases:
+                  </p>
+                </div>
+
+                <button
+                  className="btn-primary"
+                  onClick={() => launchQuestion(0)}
+                  disabled={ingesting}
+                  style={{ background: '#0891b2', padding: '8px 18px', fontSize: 13 }}
+                >
+                  <Play className="h-4 w-4" /> Start Round (Q1)
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {generatedOaQuestions.map((q, idx) => (
+                  <div
+                    key={q.question_id}
+                    style={{
+                      background: 'var(--color-paper-white)',
+                      border: '1.5px solid var(--color-mist-border)',
+                      borderRadius: 12,
+                      padding: '16px 20px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 16,
+                      boxShadow: 'var(--shadow-card)',
+                      transition: 'border-color 0.15s, transform 0.15s',
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <span className="font-mono text-xs font-bold text-iris-bolt px-2 py-0.5 rounded bg-lilac-wash">
+                          {q.question_id}
+                        </span>
+                        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--color-ink-charcoal)' }}>
+                          {q.title}
+                        </h3>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: '2px 8px',
+                            borderRadius: 200,
+                            background:
+                              q.difficulty === 'Easy' ? '#dcfce7' : q.difficulty === 'Medium' ? '#fef3c7' : '#fee2e2',
+                            color:
+                              q.difficulty === 'Easy' ? '#15803d' : q.difficulty === 'Medium' ? '#b45309' : '#b91c1c',
+                          }}
+                        >
+                          {q.difficulty}
+                        </span>
+                        <span style={{ fontSize: 12, color: 'var(--color-slate-veil)' }}>
+                          {q.topics.join(' · ')}
+                        </span>
+                        {solvedMap[q.question_id] && (
+                          <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded border border-green-200">
+                            ✓ Passed
+                          </span>
+                        )}
+                      </div>
+
+                      <p style={{ margin: 0, fontSize: 13, color: 'var(--color-ink-charcoal)', lineHeight: '20px' }}>
+                        {q.problem_statement.slice(0, 150)}...
+                      </p>
+
+                      <p style={{ margin: 0, fontSize: 12, color: 'var(--color-slate-veil)' }}>
+                        <strong>Selection Reason:</strong> {q.selection_reason}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerFullscreen()
+                        launchQuestion(idx)
+                      }}
+                      disabled={ingesting}
+                      className="btn-primary shrink-0"
+                      style={{
+                        background: '#0891b2',
+                        padding: '10px 18px',
+                        fontSize: 13,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                      }}
+                    >
+                      <Code2 className="h-4 w-4" /> Open in Compiler →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* ── FIX 4: Distraction-Free 2-Column Split-Screen OA Environment ── */
+        <main className="flex flex-1 min-h-0 w-full overflow-hidden">
+          <LeetCodeWorkspace
+            key={`${activeSessionId}_${activeQuestionIdx}`}
+            sessionId={activeSessionId}
+            question={activeQ}
+            questionNumber={activeQuestionIdx + 1}
+            totalQuestions={generatedOaQuestions.length}
+            onSolved={markQuestionSolved}
+            initialLanguage="cpp"
+          />
         </main>
       )}
 
@@ -623,179 +789,6 @@ export default function DsaPage({ onBack }: Props) {
           onClose={() => setShowReport(false)}
         />
       )}
-    </div>
-  )
-}
-
-function DsaLanding({
-  selectedProb,
-  onSelectProblem,
-  onStart,
-  busy,
-}: {
-  selectedProb: ProblemDef
-  onSelectProblem: (p: ProblemDef) => void
-  onStart: (p: ProblemDef) => void
-  busy: boolean
-}) {
-  return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '40px 24px' }}>
-      <div style={{ maxWidth: 960, margin: '0 auto' }}>
-        {/* Header */}
-        <div style={{ textAlign: 'center', marginBottom: 40 }}>
-          <div
-            style={{
-              width: 64,
-              height: 64,
-              borderRadius: 18,
-              background: 'var(--color-pastel-cyan)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              margin: '0 auto 16px',
-            }}
-          >
-            <BookOpen className="h-7 w-7" style={{ color: '#0891b2' }} strokeWidth={1.5} />
-          </div>
-          <h1 style={{ margin: '0 0 10px', fontSize: 32, fontWeight: 700, color: 'var(--color-ink-charcoal)' }}>
-            DSA & Online Assessment Prep
-          </h1>
-          <p style={{ margin: 0, fontSize: 16, color: 'var(--color-slate-veil)', maxWidth: 600, marginInline: 'auto' }}>
-            Practice algorithmic interviews with an examiner who listens to your reasoning, inspects your code, and runs live unit tests.
-          </p>
-        </div>
-
-        {/* Problems Grid */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: 16,
-            marginBottom: 32,
-          }}
-        >
-          {DSA_PROBLEMS.map(p => {
-            const isSelected = p.id === selectedProb.id
-            return (
-              <div
-                key={p.id}
-                onClick={() => onSelectProblem(p)}
-                style={{
-                  background: 'var(--color-paper-white)',
-                  border: isSelected ? '2px solid #0891b2' : '1px solid var(--color-mist-border)',
-                  borderRadius: 12,
-                  padding: 20,
-                  cursor: 'pointer',
-                  boxShadow: isSelected ? 'var(--shadow-card)' : 'none',
-                  transition: 'border-color 0.15s, box-shadow 0.15s',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 10,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'between' }}>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 700,
-                      padding: '2px 8px',
-                      borderRadius: 200,
-                      background:
-                        p.difficulty === 'Easy'
-                          ? '#e0f2fe'
-                          : p.difficulty === 'Medium'
-                          ? '#fef3c7'
-                          : '#fee2e2',
-                      color:
-                        p.difficulty === 'Easy'
-                          ? '#0284c7'
-                          : p.difficulty === 'Medium'
-                          ? '#b45309'
-                          : '#b91c1c',
-                    }}
-                  >
-                    {p.difficulty}
-                  </span>
-                  <span style={{ fontSize: 12, color: 'var(--color-slate-veil)', marginLeft: 'auto' }}>
-                    {p.category}
-                  </span>
-                </div>
-                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 600, color: 'var(--color-ink-charcoal)' }}>
-                  {p.title}
-                </h3>
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: 13,
-                    lineHeight: '20px',
-                    color: 'var(--color-slate-veil)',
-                    display: '-webkit-box',
-                    WebkitLineClamp: 3,
-                    WebkitBoxOrient: 'vertical',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {p.description}
-                </p>
-              </div>
-            )
-          })}
-        </div>
-
-        {/* Selected Problem Action Card */}
-        <div
-          style={{
-            background: 'var(--color-paper-white)',
-            border: '1px solid var(--color-mist-border)',
-            borderRadius: 16,
-            padding: 28,
-            boxShadow: 'var(--shadow-card)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 20,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-            <div>
-              <span style={{ fontSize: 13, fontWeight: 600, color: '#0891b2' }}>SELECTED CHALLENGE</span>
-              <h2 style={{ margin: '4px 0 8px', fontSize: 24, fontWeight: 700, color: 'var(--color-ink-charcoal)' }}>
-                {selectedProb.title}
-              </h2>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                <span style={{ fontSize: 13, color: 'var(--color-slate-veil)' }}>
-                  <strong>Category:</strong> {selectedProb.category}
-                </span>
-                <span style={{ fontSize: 13, color: 'var(--color-slate-veil)' }}>
-                  <strong>Target File:</strong> <code>{selectedProb.targetFile}</code>
-                </span>
-              </div>
-            </div>
-
-            <button
-              className="btn-primary"
-              onClick={() => onStart(selectedProb)}
-              disabled={busy}
-              style={{ background: '#0891b2', padding: '12px 28px', fontSize: 15 }}
-            >
-              <Play className="h-4 w-4" /> Start Interview Session
-            </button>
-          </div>
-
-          <div
-            style={{
-              background: 'var(--color-chalk-canvas)',
-              borderRadius: 8,
-              padding: 16,
-              fontSize: 14,
-              lineHeight: '22px',
-              color: 'var(--color-ink-charcoal)',
-              whiteSpace: 'pre-wrap',
-            }}
-          >
-            {selectedProb.description}
-          </div>
-        </div>
-      </div>
     </div>
   )
 }
