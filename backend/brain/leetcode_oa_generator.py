@@ -57,7 +57,7 @@ You must handle two categories of profiles:
    `stdin` must be the exact raw string fed to standard input (including newlines if multi-line).
    `expected_output` must be the exact expected string printed to standard output.
 10. `starter_templates`: Object with keys "cpp", "python", "java", "javascript" containing authentic LeetCode `class Solution` method signatures (NO `int main()`, NO standard headers, clean empty method bodies with type annotations).
-11. `driver_code`: Object with keys "cpp", "python", "java", "javascript" containing the hidden driver that parses stdin, invokes `Solution`, and prints the return value to stdout.
+11. `driver_code`: Object with keys "cpp", "python", "java", "javascript" containing the hidden driver that parses stdin, invokes `Solution`, and prints the return value to stdout. In `driver_code['cpp']`, you MUST use valid syntax: `#include <iostream>` or start directly with `int main() { ... }`. NEVER write `#iostream` or other invalid preprocessor directives.
 
 OUTPUT STRICT JSON ONLY with the key "oa_questions":
 {
@@ -310,6 +310,10 @@ def _validate_and_parse_questions(raw_questions: List[Dict[str, Any]]) -> List[O
 
         starter_templates = q.get("starter_templates") or {}
         driver_code = q.get("driver_code") or {}
+        if isinstance(driver_code, dict) and "cpp" in driver_code and isinstance(driver_code["cpp"], str):
+            driver_code["cpp"] = re.sub(r"^\s*#\s*iostream\b", "#include <iostream>", driver_code["cpp"], flags=re.MULTILINE)
+            driver_code["cpp"] = re.sub(r"^\s*#\s*vector\b", "#include <vector>", driver_code["cpp"], flags=re.MULTILINE)
+            driver_code["cpp"] = re.sub(r"^\s*#\s*string\b", "#include <string>", driver_code["cpp"], flags=re.MULTILINE)
 
         # Synthesize fallback class Solution templates if omitted by LLM
         method_name = "".join(
