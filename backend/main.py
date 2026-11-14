@@ -290,12 +290,26 @@ def _mock_paper_index(filename: str = "sample_paper.pdf") -> PaperIndex:
             ),
         ),
     ]
+    from backend.ingestion.paper_breakdown import build_paper_breakdown
+
+    mock_sections = [
+        {"title": n.section or n.label, "page_start": idx, "page_end": idx, "text": n.excerpt}
+        for idx, n in enumerate(nodes, start=1)
+    ]
+    mock_pages = [f"{filename.replace('.pdf', '').replace('_', ' ').title()}\n" + "\n".join(n.excerpt for n in nodes)]
+    breakdown = build_paper_breakdown(
+        page_texts=mock_pages,
+        sections=mock_sections,
+        paper_nodes=nodes,
+        reconstructed_from_headings=True,
+    )
     return PaperIndex(
         title=filename.replace(".pdf", "").replace("_", " ").title(),
         mermaid_graph=mermaid_graph,
         nodes=nodes,
         node_excerpts={n.node_id: n.excerpt for n in nodes},
         full_text_summary="Research paper on AST-grounded adaptive technical viva and fluency-blind semantic evaluation.",
+        breakdown=breakdown,
     )
 
 
@@ -332,15 +346,23 @@ def _invoke_m2_repo_ingestion(github_url: str, use_demo_cache: bool = False) -> 
 
 
 def _invoke_m2_pdf_ingestion(pdf_bytes: bytes, filename: str) -> PaperIndex:
-    """Calls M2's `parse_research_paper(pdf_bytes)` if present, else falls back to mock."""
-    if pdf_bytes:
-        try:
-            from backend.ingestion import pdf_parser  # type: ignore
+    """Calls M2's `parse_research_paper(pdf_bytes)` if present, loading demo PDF when `pdf_bytes` is empty."""
+    try:
+        from backend.ingestion import pdf_parser  # type: ignore
 
-            if hasattr(pdf_parser, "parse_research_paper"):
-                return pdf_parser.parse_research_paper(pdf_bytes)
-        except Exception:
-            pass
+        effective_bytes = pdf_bytes
+        if not effective_bytes and hasattr(pdf_parser, "load_demo_paper_bytes"):
+            try:
+                effective_bytes = pdf_parser.load_demo_paper_bytes()
+            except Exception:
+                effective_bytes = b""
+
+        if effective_bytes and hasattr(pdf_parser, "parse_research_paper"):
+            return pdf_parser.parse_research_paper(effective_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        pass
     return _mock_paper_index(filename)
 
 
@@ -628,32 +650,43 @@ async def ingest_pdf(
     file: Optional[UploadFile] = File(default=None),
 ) -> IngestResponse:
     """
-    1. Extracts text per page/section using PyMuPDF and synthesizes a 5-to-8 node Mermaid flowchart.
-    2. Maps each node ID (`N1..N8`) to a 2-sentence verbatim paper excerpt.
-    3. Initializes an adaptive L1-L4 Paper Viva session and synthesizes opening TTS question.
+    Extracts text per page/section with furniture filtering and exact page provenance,
+    constructs a validated method pipeline graph, and returns a structured PaperBreakdown.
     """
     pdf_bytes = b""
     filename = "sample_paper.pdf"
     if file is not None:
         filename = file.filename or filename
         pdf_bytes = await file.read()
+        if not pdf_bytes:
+            raise HTTPException(status_code=400, detail="Uploaded PDF file is empty.")
 
     paper_index = _invoke_m2_pdf_ingestion(pdf_bytes=pdf_bytes, filename=filename)
 
+    # Research Paper Explorer does not use spoken voice synthesis; skip slow TTS here
     initial_turn = start_session(
         mode="paper",
         paper_index=paper_index,
-        audio_synthesizer=_invoke_m3_tts,
+        audio_synthesizer=lambda _: "",
     )
+
+    detected_authors: list[str] = []
+    if (
+        paper_index.breakdown
+        and paper_index.breakdown.authors_status == "identified"
+        and paper_index.breakdown.authors_and_affiliations
+    ):
+        detected_authors = [paper_index.breakdown.authors_and_affiliations]
 
     return IngestResponse(
         session_id=initial_turn.session_id,
         mode="paper",
         title=paper_index.title,
-        authors=[],
+        authors=detected_authors,
         files=[],
         mermaid_graph=paper_index.mermaid_graph,
         paper_nodes=paper_index.nodes,
+        paper_breakdown=paper_index.breakdown,
         initial_turn=initial_turn,
     )
 
