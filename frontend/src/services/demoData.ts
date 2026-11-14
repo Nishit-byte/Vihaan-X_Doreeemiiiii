@@ -1,6 +1,6 @@
 // Offline fallback so the demo survives a dead backend or venue Wi-Fi.
 import type {
-  CodingChallenge, IngestResponse, RunCodeRequest, RunCodeResponse, TurnRequest,
+  CodingChallenge, IngestResponse, PaperBreakdown, PaperNodeMeta, RunCodeRequest, RunCodeResponse, TurnRequest,
   TurnResponse, VivaReport,
 } from '../types/api'
 
@@ -91,11 +91,11 @@ const TOPK_CHALLENGE: CodingChallenge = {
 }
 
 const MERMAID = `flowchart TD
-  N1["Input documents"] --> N2["Chunking and embedding"]
-  N2 --> N3["Vector index"]
-  N3 --> N4["Top-k retriever"]
-  N4 --> N5["Generator LLM"]
-  N5 --> N6["Answer with citations"]`
+  N1["Ingest Metadata-Tagged Docs"] --> N2["Create Overlapping Chunks"]
+  N2 --> N3["Build Dense Vector Index"]
+  N3 --> N4["Retrieve Top-k Passages"]
+  N4 --> N5["Generate Context-Only Answer"]
+  N5 --> N6["Attach Chunk Citations"]`
 
 const NODES: Record<string, string> = {
   N1: 'The corpus is split into source documents before any processing. Each document keeps its metadata so answers can be traced back.',
@@ -104,6 +104,215 @@ const NODES: Record<string, string> = {
   N4: 'At query time the question is embedded and the k closest chunks are retrieved. The value of k trades recall against prompt length.',
   N5: 'The generator receives the question and retrieved chunks in one prompt. It is instructed to answer only from the supplied context.',
   N6: 'The final answer cites the chunks it used. Citations let a reader verify each claim.',
+}
+
+const NODE_META: Record<string, PaperNodeMeta> = {
+  N1: { node_id: 'N1', label: 'Ingest Metadata-Tagged Docs', summary: 'Split the raw corpus into documents while keeping source IDs and section titles.', section: 'Abstract & Corpus', page: 1, excerpt: NODES.N1 },
+  N2: { node_id: 'N2', label: 'Create Overlapping Chunks', summary: 'Slice each document using sliding windows so sentences near cut points stay whole.', section: 'Methodology — Chunking', page: 2, excerpt: NODES.N2 },
+  N3: { node_id: 'N3', label: 'Build Dense Vector Index', summary: 'Encode chunks into embeddings and store them in a fast approximate nearest-neighbour index.', section: 'Methodology — Indexing', page: 2, excerpt: NODES.N3 },
+  N4: { node_id: 'N4', label: 'Retrieve Top-k Passages', summary: 'Match each query embedding against the index and fetch the top k most relevant chunks.', section: 'Methodology — Retrieval', page: 3, excerpt: NODES.N4 },
+  N5: { node_id: 'N5', label: 'Generate Context-Only Answer', summary: 'Prompt the LLM with only the retrieved chunks and instruct it not to use outside memory.', section: 'Evaluation & Grounding', page: 3, excerpt: NODES.N5 },
+  N6: { node_id: 'N6', label: 'Attach Chunk Citations', summary: 'Link every output claim back to the chunk IDs that supplied the supporting facts.', section: 'Results & Discussion', page: 4, excerpt: NODES.N6 },
+}
+
+const DEMO_PAPER_BREAKDOWN: PaperBreakdown = {
+  extraction_status: 'ok',
+  extraction_notice: null,
+  page_count: 4,
+  title: 'Dense Passage Retrieval and Citation-Grounded Generation for Technical QA',
+  title_status: 'verified',
+  authors_and_affiliations: {
+    label: 'Authors & Affiliations',
+    value: 'A. Sharma, R. Verma, K. Iyer — Systems & Information Retrieval Lab',
+    found: true,
+    origin: 'author_claim',
+    page: 1,
+    section: 'Title & Header',
+    supporting_excerpt: 'Dense Passage Retrieval and Citation-Grounded Generation for Technical QA — A. Sharma, R. Verma, K. Iyer (Systems & Information Retrieval Lab).',
+  },
+  authors_status: 'identified',
+  venue_and_year: {
+    label: 'Publication Venue & Year',
+    value: 'Workshop on Grounded Language Systems (2024)',
+    found: true,
+    origin: 'author_claim',
+    page: 1,
+    section: 'Title & Header',
+    supporting_excerpt: 'Workshop on Grounded Language Systems, 2024.',
+  },
+  title_block_excerpt: 'Dense Passage Retrieval and Citation-Grounded Generation for Technical QA\nA. Sharma, R. Verma, K. Iyer\nSystems & Information Retrieval Lab · Workshop on Grounded Language Systems, 2024',
+  what_this_paper_does: {
+    label: 'What This Paper Does',
+    value: 'The paper constructs a six-stage document retrieval and citation pipeline that splits technical documents into overlapping segments, indexes dense sentence embeddings, retrieves the top-k passages, and restricts generation to cited context.',
+    found: true,
+    origin: 'app_interpretation',
+    page: 1,
+    section: 'Abstract',
+    supporting_excerpt: NODES.N1 + ' ' + NODES.N6,
+    plain_language: 'Instead of letting an AI answer from guesswork, this paper splits documents into overlapping snippets, retrieves the k closest matches for a question, and forces the answer to cite those exact snippets.',
+  },
+  abstract_summary: {
+    label: 'Abstract',
+    value: 'The corpus is segmented into overlapping chunks, embedded into an approximate nearest-neighbour index, and queried with top-k retrieval to constrain language generation to verifiable citations.',
+    found: true,
+    origin: 'author_claim',
+    page: 1,
+    section: 'Abstract',
+    supporting_excerpt: NODES.N1 + ' ' + NODES.N2 + ' ' + NODES.N6,
+    plain_language: 'In plain terms, overlapping snippets prevent sentences from getting cut in half, and strict prompt rules ensure every generated claim points back to a source passage.',
+  },
+  problem_and_importance: {
+    label: 'Problem Addressed & Why It Matters',
+    value: 'Standalone language models hallucinate unverified claims and lose provenance when answering detailed technical questions across large document corpora, and naive fixed-size splitting breaks context at chunk boundaries.',
+    found: true,
+    origin: 'author_claim',
+    page: 1,
+    section: 'Introduction',
+    supporting_excerpt: NODES.N2,
+  },
+  research_objective: {
+    label: 'Research Objective / Question',
+    value: 'Determine how overlapping chunking and top-k dense vector retrieval affect answer faithfulness, recall, and latency in citation-grounded generation.',
+    found: true,
+    origin: 'author_claim',
+    page: 1,
+    section: 'Introduction',
+    supporting_excerpt: NODES.N4,
+  },
+  background_prior_work: {
+    label: 'Background & Prior Work',
+    value: 'Builds upon sparse lexical retrieval (BM25), bi-encoder dense passage retrieval, and approximate nearest-neighbour (ANN) vector indices.',
+    found: true,
+    origin: 'author_claim',
+    page: 2,
+    section: 'Background',
+    supporting_excerpt: NODES.N3,
+  },
+  proposed_method: {
+    label: 'Proposed Method / Approach',
+    value: 'A 6-stage retrieval-and-citation pipeline: Document Ingestion (N1) -> Overlapping Chunking & Sentence Embedding (N2) -> ANN Vector Index (N3) -> Top-k Retriever (N4) -> Context-Constrained Generator LLM (N5) -> Cited Answer Output (N6).',
+    found: true,
+    origin: 'author_claim',
+    page: 2,
+    section: 'Methodology',
+    supporting_excerpt: NODES.N2 + ' ' + NODES.N4 + ' ' + NODES.N5,
+  },
+  step_by_step_methodology: [
+    { step_number: 1, node_id: 'N1', title: 'Input documents', summary: NODES.N1, origin: 'author_claim', page: 1, section: 'Abstract & Corpus', excerpt: NODES.N1 },
+    { step_number: 2, node_id: 'N2', title: 'Chunking and embedding', summary: NODES.N2, origin: 'author_claim', page: 2, section: 'Methodology — Chunking', excerpt: NODES.N2 },
+    { step_number: 3, node_id: 'N3', title: 'Vector index', summary: NODES.N3, origin: 'author_claim', page: 2, section: 'Methodology — Indexing', excerpt: NODES.N3 },
+    { step_number: 4, node_id: 'N4', title: 'Top-k retriever', summary: NODES.N4, origin: 'author_claim', page: 3, section: 'Methodology — Retrieval', excerpt: NODES.N4 },
+    { step_number: 5, node_id: 'N5', title: 'Generator LLM', summary: NODES.N5, origin: 'author_claim', page: 3, section: 'Evaluation & Grounding', excerpt: NODES.N5 },
+    { step_number: 6, node_id: 'N6', title: 'Answer with citations', summary: NODES.N6, origin: 'author_claim', page: 4, section: 'Results & Discussion', excerpt: NODES.N6 },
+  ],
+  data_setup_metrics: {
+    label: 'Data, Experimental Setup & Evaluation Metrics',
+    value: 'Evaluated on multi-document technical QA benchmarks measuring Recall@k, Citation Precision, Faithfulness %, and end-to-end query latency across varying k values.',
+    found: true,
+    origin: 'author_claim',
+    page: 3,
+    section: 'Evaluation & Grounding',
+    supporting_excerpt: NODES.N4 + ' ' + NODES.N5,
+  },
+  main_results: {
+    label: 'Main Results & What They Mean',
+    value: 'Overlapping chunks improve boundary recall to 88.4% (+9.2% over non-overlapping), and context-constrained generation reaches 94.1% citation faithfulness at k=5 before prompt noise degrades precision at higher k.',
+    found: true,
+    origin: 'author_claim',
+    page: 4,
+    section: 'Results & Discussion',
+    supporting_excerpt: 'Boundary recall reaches 88.4% with 20% chunk overlap, while citation faithfulness reaches 94.1% at k=5.',
+  },
+  contributions_novelty: {
+    label: 'Contributions & What Is New',
+    value: '1) Metadata-preserving overlapping chunk pipeline; 2) Systematic characterization of the k recall-vs-prompt-noise trade-off; 3) Strict chunk-level citation verification.',
+    found: true,
+    origin: 'author_claim',
+    page: 1,
+    section: 'Introduction',
+    supporting_excerpt: NODES.N1 + ' ' + NODES.N6,
+  },
+  limitations_assumptions: {
+    label: 'Limitations & Assumptions Stated by Authors',
+    value: 'Assumes the answer exists within the top-k retrieved chunks; very large k increases prompt length and distracts the generator; approximate nearest-neighbour search can miss rare lexical exact matches.',
+    found: true,
+    origin: 'author_claim',
+    page: 4,
+    section: 'Limitations',
+    supporting_excerpt: NODES.N4 + ' ' + NODES.N5,
+  },
+  implications_future_work: {
+    label: 'Practical Implications & Possible Future Work',
+    value: 'Hybrid sparse + dense retrieval and cross-encoder re-ranking can allow smaller k values in production prompts while maintaining high recall.',
+    found: true,
+    origin: 'app_interpretation',
+    page: 4,
+    section: 'Results & Discussion',
+    supporting_excerpt: NODES.N4,
+  },
+  key_takeaways: [
+    { label: 'Takeaway 1', value: 'Overlapping chunks prevent context loss at split boundaries (p. 2).', found: true, origin: 'author_claim', page: 2, section: 'Methodology — Chunking', supporting_excerpt: NODES.N2 },
+    { label: 'Takeaway 2', value: 'Choosing top-k balances retrieval recall against prompt length and distraction (p. 3).', found: true, origin: 'author_claim', page: 3, section: 'Methodology — Retrieval', supporting_excerpt: NODES.N4 },
+    { label: 'Takeaway 3', value: 'Constrained generation + chunk citations let readers audit every claim (p. 4).', found: true, origin: 'author_claim', page: 4, section: 'Results & Discussion', supporting_excerpt: NODES.N6 },
+  ],
+  story_map: [
+    { label: 'Problem', value: 'Unconstrained LLMs hallucinate and fixed chunk boundaries split critical technical context.', found: true, origin: 'author_claim', page: 1, section: 'Introduction', supporting_excerpt: NODES.N2 },
+    { label: 'Approach', value: 'Embed overlapping document chunks into an ANN vector index and retrieve top-k passages per query.', found: true, origin: 'author_claim', page: 2, section: 'Methodology', supporting_excerpt: NODES.N3 + ' ' + NODES.N4 },
+    { label: 'Evidence', value: '88.4% Recall@5 with overlapping chunks and 94.1% citation faithfulness under strict prompt grounding.', found: true, origin: 'author_claim', page: 4, section: 'Results & Discussion', supporting_excerpt: NODES.N5 + ' ' + NODES.N6 },
+    { label: 'Conclusion', value: 'Citation-grounded RAG delivers verifiable answers provided k is tuned to avoid prompt dilution.', found: true, origin: 'app_interpretation', page: 4, section: 'Results & Discussion', supporting_excerpt: NODES.N6 },
+  ],
+  story_map_provenance: 'conceptual_explanation',
+  methodology_diagram_status: 'ok',
+  methodology_diagram_note: null,
+  methodology_diagram_provenance: 'reconstructed_from_paper',
+  quantitative_results: [
+    {
+      metric_label: 'Recall@5 (Chunk Overlap vs Disjoint)',
+      comparison_context: '20% overlapping windows vs non-overlapping chunks',
+      baseline_label: 'Disjoint chunks',
+      baseline_value: 79.2,
+      proposed_label: 'Overlapping chunks',
+      proposed_value: 88.4,
+      value_display: '88.4% vs 79.2%',
+      numeric_value: 88.4,
+      unit: '%',
+      baseline_or_context: 'Disjoint baseline: 79.2% (p. 4)',
+      page: 4,
+      section: 'Results & Discussion',
+      excerpt: 'Overlapping chunks achieve 88.4% Recall@5 compared to 79.2% for disjoint chunks.',
+    },
+    {
+      metric_label: 'Citation Faithfulness (k=5 vs Unconstrained)',
+      comparison_context: 'Context-only prompt constraint vs unconstrained generation',
+      baseline_label: 'Unconstrained LLM',
+      baseline_value: 71.5,
+      proposed_label: 'Citation-grounded (k=5)',
+      proposed_value: 94.1,
+      value_display: '94.1% vs 71.5%',
+      numeric_value: 94.1,
+      unit: '%',
+      baseline_or_context: 'Unconstrained baseline: 71.5% (p. 4)',
+      page: 4,
+      section: 'Results & Discussion',
+      excerpt: 'Citation faithfulness improves from 71.5% under unconstrained prompting to 94.1% at k=5.',
+    },
+  ],
+  results_chart_provenance: 'reconstructed_from_paper',
+  glossary: [
+    { term: 'Chunk Overlap', definition: 'Repeating a sliding window of tokens between adjacent document segments so sentences split at boundaries remain intact in at least one chunk.', origin: 'author_claim', page: 2, excerpt: NODES.N2 },
+    { term: 'ANN Vector Index', definition: 'Approximate Nearest-Neighbour data structure (such as HNSW or IVF) that retrieves close embedding vectors in sub-linear time.', origin: 'author_claim', page: 2, excerpt: NODES.N3 },
+    { term: 'Top-k Retriever', definition: 'Selection step that ranks embedded chunks by similarity to the query embedding and returns the k highest-scoring passages.', origin: 'author_claim', page: 3, excerpt: NODES.N4 },
+    { term: 'Grounded Generation', definition: 'Instructing the generator LLM to synthesize answers strictly from retrieved passages and attach passage citations.', origin: 'author_claim', page: 3, excerpt: NODES.N5 },
+  ],
+  sections_index: [
+    { section: 'Abstract & Corpus', page: 1, excerpt: NODES.N1, node_id: 'N1', origin: 'author_claim' },
+    { section: 'Methodology — Chunking', page: 2, excerpt: NODES.N2, node_id: 'N2', origin: 'author_claim' },
+    { section: 'Methodology — Indexing', page: 2, excerpt: NODES.N3, node_id: 'N3', origin: 'author_claim' },
+    { section: 'Methodology — Retrieval', page: 3, excerpt: NODES.N4, node_id: 'N4', origin: 'author_claim' },
+    { section: 'Evaluation & Grounding', page: 3, excerpt: NODES.N5, node_id: 'N5', origin: 'author_claim' },
+    { section: 'Results & Discussion', page: 4, excerpt: NODES.N6, node_id: 'N6', origin: 'author_claim' },
+  ],
+  viva_questions: [],
 }
 
 const base = (sid: string) => ({
@@ -161,8 +370,8 @@ export function mockIngestPdf(): IngestResponse {
   const sid = 'demo-paper-' + Math.random().toString(36).slice(2, 8)
   progress.set(sid, { n: 0, mode: 'paper', solved: 0, current: null })
   return {
-    session_id: sid, mode: 'paper', files: [], authors: [],
-    paper: { mermaid: MERMAID, nodes: NODES },
+    session_id: sid, mode: 'paper', files: [], authors: ['A. Sharma', 'R. Verma', 'K. Iyer'],
+    paper: { mermaid: MERMAID, nodes: NODES, node_meta: NODE_META, breakdown: DEMO_PAPER_BREAKDOWN },
     first_turn: PAPER_TURNS(sid)[0],
   }
 }

@@ -72,9 +72,120 @@ class RepoIndex(BaseModel):
 
 class PaperNode(BaseModel):
     node_id: str = Field(..., description="Mermaid node ID, e.g. N1..N8")
-    label: str = Field(..., description="Short human-readable stage title")
+    label: str = Field(..., description="Short human-readable functional stage title")
+    summary: Optional[str] = Field(default=None, description="Plain-language explanation of what this stage does")
     section: Optional[str] = None
-    excerpt: str = Field(..., description="2-sentence verbatim excerpt from the paper")
+    page: int = Field(default=1, ge=1, description="1-based PDF page number")
+    excerpt: str = Field(..., description="Verbatim supporting excerpt from the paper")
+
+
+class EvidenceRef(BaseModel):
+    id: str
+    label: str
+    claim_or_insight: str
+    source_type: Literal["author_claim", "app_interpretation"] = "author_claim"
+    excerpt: str
+    page: int = 1
+    section: str = "Paper overview"
+
+
+class BreakdownField(BaseModel):
+    content: str = "Not found in the paper"
+    plain_language: Optional[str] = None
+    interpretation: Optional[str] = None
+    source_type: Literal["author_claim", "app_interpretation"] = "author_claim"
+    page: Optional[int] = None
+    section: Optional[str] = None
+    excerpt: Optional[str] = None
+    found: bool = False
+
+
+class MethodologyStep(BaseModel):
+    step_number: int
+    node_id: Optional[str] = None
+    title: str
+    description: str
+    plain_language: Optional[str] = None
+    source_type: Literal["author_claim", "app_interpretation"] = "author_claim"
+    page: int = 1
+    section: str = "Methodology"
+    excerpt: str
+
+
+class ResultDataPoint(BaseModel):
+    metric: str
+    comparison_context: Optional[str] = None
+    baseline_label: Optional[str] = None
+    baseline_value: Optional[float] = None
+    proposed_label: str = "Proposed"
+    proposed_value: float
+    unit: str = ""
+    page: int = 1
+    excerpt: str
+
+
+class GlossaryItem(BaseModel):
+    term: str
+    definition: str
+    source_type: Literal["author_defined", "app_interpretation"] = "app_interpretation"
+    page: int = 1
+    excerpt: str
+
+
+class PaperVivaQuestion(BaseModel):
+    id: str
+    category: Literal[
+        "Basic understanding",
+        "Methodology & design choices",
+        "Results & evidence",
+        "Limitations & trade-offs",
+        "What would change if...",
+    ]
+    question: str
+    why_asked: str
+    page: int = 1
+    section: str = "Paper overview"
+    excerpt: str
+
+
+class PaperBreakdown(BaseModel):
+    title: str
+    title_status: Literal["verified", "uncertain"] = "verified"
+    authors_and_affiliations: str = "Not found in the paper"
+    authors_status: Literal["identified", "uncertain", "not_found"] = "not_found"
+    venue_and_year: str = "Not found in the paper"
+    title_block_excerpt: Optional[str] = None
+    what_this_paper_does: str
+    what_this_paper_does_plain: Optional[str] = None
+    extraction_status: Literal["ok", "scanned_or_empty", "partial"] = "ok"
+    extraction_warning: Optional[str] = None
+    page_count: int = 1
+    methodology_diagram_status: Literal["ok", "fallback"] = "ok"
+    methodology_diagram_note: Optional[str] = None
+    diagram_provenance: Literal[
+        "Reconstructed from the paper", "Conceptual explanation"
+    ] = "Reconstructed from the paper"
+    story_map_provenance: Literal[
+        "Reconstructed from the paper", "Conceptual explanation"
+    ] = "Conceptual explanation"
+    abstract_summary: BreakdownField
+    problem_and_significance: BreakdownField
+    research_objective: BreakdownField
+    background_and_prior_work: BreakdownField
+    proposed_method: BreakdownField
+    step_by_step_methodology: List[MethodologyStep] = Field(default_factory=list)
+    data_setup_and_metrics: BreakdownField
+    main_results: BreakdownField
+    results_summary_note: Optional[str] = None
+    contributions: BreakdownField
+    limitations_and_assumptions: BreakdownField
+    implications_and_future_work: BreakdownField
+    key_takeaways: List[EvidenceRef] = Field(default_factory=list)
+    story_map: List[EvidenceRef] = Field(default_factory=list)
+    sections_index: List[EvidenceRef] = Field(default_factory=list)
+    quantitative_results: List[ResultDataPoint] = Field(default_factory=list)
+    glossary: List[GlossaryItem] = Field(default_factory=list)
+    viva_questions: List[PaperVivaQuestion] = Field(default_factory=list)
 
 
 class PaperIndex(BaseModel):
@@ -83,6 +194,7 @@ class PaperIndex(BaseModel):
     nodes: List[PaperNode] = Field(default_factory=list)
     node_excerpts: Dict[str, str] = Field(default_factory=dict)
     full_text_summary: str = ""
+    breakdown: Optional[PaperBreakdown] = None
 
 
 # ============================================================================
@@ -210,6 +322,7 @@ class IngestResponse(BaseModel):
     files: List[RepoFile] = Field(default_factory=list)
     mermaid_graph: Optional[str] = None
     paper_nodes: List[PaperNode] = Field(default_factory=list)
+    paper_breakdown: Optional[PaperBreakdown] = None
     dsa_profile: Optional[LeetCodeProfileSummary] = None
     initial_turn: TurnResponse
     first_turn: Optional[TurnResponse] = None
