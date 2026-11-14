@@ -225,7 +225,14 @@ export default function DsaPage({ onBack }: Props) {
   const [report, setReport] = useState<VivaReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
-  const { startProctoredSession, endProctoredSession, isFullscreen } = useProctor()
+  const { startProctoredSession, endProctoredSession, isFullscreen, terminatedDueToViolation } = useProctor()
+
+  // On anti-plagiarism violation (exiting fullscreen), immediately end OA compiler session
+  useEffect(() => {
+    if (terminatedDueToViolation) {
+      setActiveSessionId(null)
+    }
+  }, [terminatedDueToViolation])
 
   // Ingest LeetCode Profile via live FastAPI /api/ingest-leetcode
   const handleIngestLeetCode = async (usernameOrUrl: string) => {
@@ -264,16 +271,18 @@ export default function DsaPage({ onBack }: Props) {
 
   async function finishAssessment() {
     if (!activeSessionId) return
+    const sid = activeSessionId
+    setActiveSessionId(null)
     await endProctoredSession()
     setShowReport(true)
     setReportLoading(true)
     setReportError(null)
     try {
-      setReport(await fetchReport(activeSessionId))
+      setReport(await fetchReport(sid))
     } catch {
       const solvedCount = Object.values(solvedMap).filter(Boolean).length
       setReport({
-        session_id: activeSessionId,
+        session_id: sid,
         overall_score: Math.min(100, Math.max(60, 60 + solvedCount * 8)),
         rubric: {
           clarity: 90,

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
-import { AlertOctagon, FileText, Home, Lock, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { AlertOctagon, FileText, Home, Lock, ShieldAlert, ShieldCheck, Volume2 } from 'lucide-react'
 import { fetchReport, terminateSession } from '../services/apiClient'
+import { speakWithBrowserTTS, stopAllPlayback } from '../services/audioRecorder'
 import type { VivaReport } from '../types/api'
 import ReportModal from '../components/ReportModal'
 import {
@@ -46,6 +47,7 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
   const [isSessionActive, setIsSessionActive] = useState(false)
   const [isProctoredArmed, setIsProctoredArmed] = useState(false)
   const [terminatedDueToViolation, setTerminatedDueToViolation] = useState(false)
+  const [violationMessage, setViolationMessage] = useState<string>('')
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(isInFullscreen())
   const [isFullscreenSupported] = useState(checkFullscreenSupported())
@@ -65,6 +67,11 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
   const triggerViolation = (reason: string) => {
     if (!isSessionActiveRef.current) return
 
+    const warningText =
+      reason === 'tab_switch_visibility_hidden'
+        ? 'Warning: Anti-plagiarism violation detected. You navigated away from the assessment window. Your assessment has been ended.'
+        : 'Warning: Anti-plagiarism violation detected. You exited fullscreen mode. Your assessment has been ended.'
+
     // 1. Mark session inactive and violation triggered
     isProctoredArmedRef.current = false
     setIsProctoredArmed(false)
@@ -72,13 +79,12 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
     isSessionActiveRef.current = false
     setIsProctored(false)
     setIsSessionActive(false)
+    setViolationMessage(warningText)
     setTerminatedDueToViolation(true)
 
-    // 2. Immediately stop all TTS audio and media elements
+    // 2. Halt previous background audio immediately
+    stopAllPlayback()
     try {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel()
-      }
       document.querySelectorAll('audio').forEach(el => {
         el.pause()
         el.currentTime = 0
@@ -87,7 +93,16 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
       // Ignore media cleanup errors
     }
 
-    // 3. Notify backend
+    // 3. Spoken voice warning: Examiner audibly speaks the anti-plagiarism warning (as in viva)
+    try {
+      setTimeout(() => {
+        speakWithBrowserTTS(warningText)
+      }, 80)
+    } catch (e) {
+      console.warn('[Proctor] Could not play spoken violation warning:', e)
+    }
+
+    // 4. Notify backend
     const currentId = activeSessionIdRef.current
     if (currentId) {
       terminateSession(currentId, reason).catch(() => {})
@@ -187,6 +202,7 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
   }
 
   const resetViolation = () => {
+    stopAllPlayback()
     isProctoredArmedRef.current = false
     setIsProctoredArmed(false)
     isProctoredRef.current = false
@@ -194,6 +210,7 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
     setIsProctored(false)
     setIsSessionActive(false)
     setTerminatedDueToViolation(false)
+    setViolationMessage('')
     setShowReport(false)
     if (onNavigateHome) {
       onNavigateHome()
@@ -437,6 +454,43 @@ export function ProctorProvider({ children, onNavigateHome }: ProviderProps) {
                 Further submissions, audio responses, and compiler executions for this session have been permanently disabled.
               </span>
             </div>
+
+            {violationMessage && (
+              <div
+                style={{
+                  width: '100%',
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: 8,
+                  padding: '10px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left' }}>
+                  <Volume2 className="h-4 w-4 shrink-0 text-slate-700" />
+                  <span style={{ fontSize: 12, color: '#334155', fontWeight: 500, fontStyle: 'italic' }}>
+                    "{violationMessage}"
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => speakWithBrowserTTS(violationMessage)}
+                  className="btn-outline shrink-0"
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                    borderColor: '#94a3b8',
+                  }}
+                >
+                  Replay Voice
+                </button>
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: 12, width: '100%', justifyContent: 'center', marginTop: 8 }}>
               <button
