@@ -54,6 +54,18 @@ const INITIAL_OA_QUESTIONS: OAQuestion[] = [
       { input: '6 2\n1 2 3 1 2 3\n', output: 'false', explanation: 'Minimum duplicate index distance is 3 > 2.' },
     ],
     constraints: ['1 <= n <= 10^5', '0 <= k <= 10^5', '-10^9 <= nums[i] <= 10^9'],
+    starter_templates: {
+      cpp: 'class Solution {\npublic:\n    bool containsNearbyDuplicate(vector<int>& nums, int k) {\n        \n    }\n};',
+      python: 'class Solution:\n    def containsNearbyDuplicate(self, nums: List[int], k: int) -> bool:\n        pass',
+      java: 'class Solution {\n    public boolean containsNearbyDuplicate(int[] nums, int k) {\n        \n    }\n}',
+      javascript: '/**\n * @param {number[]} nums\n * @param {number} k\n * @return {boolean}\n */\nvar containsNearbyDuplicate = function(nums, k) {\n    \n};',
+    },
+    driver_code: {
+      cpp: 'int main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    int n, k;\n    if (!(cin >> n >> k)) return 0;\n    vector<int> nums(n);\n    for (int i = 0; i < n; i++) cin >> nums[i];\n    Solution sol;\n    cout << (sol.containsNearbyDuplicate(nums, k) ? "true" : "false") << "\\n";\n    return 0;\n}',
+      python: "if __name__ == '__main__':\n    import sys\n    tokens = sys.stdin.read().split()\n    if tokens:\n        n = int(tokens[0])\n        k = int(tokens[1])\n        nums = [int(x) for x in tokens[2:2 + n]]\n        sol = Solution()\n        res = sol.containsNearbyDuplicate(nums, k)\n        print('true' if res else 'false')",
+      java: 'public class Main {\n    public static void main(String[] args) throws Exception {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int k = sc.nextInt();\n        int[] nums = new int[n];\n        for (int i = 0; i < n; i++) nums[i] = sc.nextInt();\n        Solution sol = new Solution();\n        boolean res = sol.containsNearbyDuplicate(nums, k);\n        System.out.println(res ? "true" : "false");\n    }\n}',
+      javascript: "const fs = require('fs');\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\s+/);\nif (tokens.length >= 2 && tokens[0] !== '') {\n    const n = parseInt(tokens[0], 10);\n    const k = parseInt(tokens[1], 10);\n    const nums = tokens.slice(2, 2 + n).map(Number);\n    const fn = typeof containsNearbyDuplicate === 'function' ? containsNearbyDuplicate : (typeof Solution !== 'undefined' ? new Solution().containsNearbyDuplicate : null);\n    const res = fn ? fn(nums, k) : false;\n    console.log(res ? 'true' : 'false');\n}",
+    },
     test_cases: [
       { stdin: '4 3\n1 2 3 1\n', expected_output: 'true', is_hidden: false },
       { stdin: '6 2\n1 2 3 1 2 3\n', expected_output: 'false', is_hidden: false },
@@ -75,6 +87,18 @@ const INITIAL_OA_QUESTIONS: OAQuestion[] = [
       { input: '3 2\n1 1 1\n', output: '2', explanation: '[1, 1] at indices [0, 1] and [1, 2] are valid.' },
     ],
     constraints: ['1 <= n <= 2 * 10^4', '-1000 <= nums[i] <= 1000', '-10^7 <= k <= 10^7'],
+    starter_templates: {
+      cpp: 'class Solution {\npublic:\n    int subarraySumEven(vector<int>& nums, int k) {\n        \n    }\n};',
+      python: 'class Solution:\n    def subarraySumEven(self, nums: List[int], k: int) -> int:\n        pass',
+      java: 'class Solution {\n    public int subarraySumEven(int[] nums, int k) {\n        \n    }\n}',
+      javascript: '/**\n * @param {number[]} nums\n * @param {number} k\n * @return {number}\n */\nvar subarraySumEven = function(nums, k) {\n    \n};',
+    },
+    driver_code: {
+      cpp: 'int main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    int n, k;\n    if (!(cin >> n >> k)) return 0;\n    vector<int> nums(n);\n    for (int i = 0; i < n; i++) cin >> nums[i];\n    Solution sol;\n    cout << sol.subarraySumEven(nums, k) << "\\n";\n    return 0;\n}',
+      python: "if __name__ == '__main__':\n    import sys\n    tokens = sys.stdin.read().split()\n    if tokens:\n        n = int(tokens[0])\n        k = int(tokens[1])\n        nums = [int(x) for x in tokens[2:2 + n]]\n        sol = Solution()\n        print(sol.subarraySumEven(nums, k))",
+      java: 'public class Main {\n    public static void main(String[] args) throws Exception {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int k = sc.nextInt();\n        int[] nums = new int[n];\n        for (int i = 0; i < n; i++) nums[i] = sc.nextInt();\n        Solution sol = new Solution();\n        System.out.println(sol.subarraySumEven(nums, k));\n    }\n}',
+      javascript: "const fs = require('fs');\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\s+/);\nif (tokens.length >= 2 && tokens[0] !== '') {\n    const n = parseInt(tokens[0], 10);\n    const k = parseInt(tokens[1], 10);\n    const nums = tokens.slice(2, 2 + n).map(Number);\n    const fn = typeof subarraySumEven === 'function' ? subarraySumEven : (typeof Solution !== 'undefined' ? new Solution().subarraySumEven : null);\n    console.log(fn ? fn(nums, k) : 0);\n}",
+    },
     test_cases: [
       { stdin: '5 3\n1 2 1 2 1\n', expected_output: '2', is_hidden: false },
       { stdin: '3 2\n1 1 1\n', expected_output: '2', is_hidden: false },
@@ -95,6 +119,18 @@ const INITIAL_OA_QUESTIONS: OAQuestion[] = [
       { input: '6 5\n10 1 2 4 7 2\n', output: '4', explanation: 'Subarray [2, 4, 7, 2] has max-min = 7-2 = 5 <= 5.' },
     ],
     constraints: ['1 <= n <= 10^5', '1 <= nums[i] <= 10^9', '0 <= limit <= 10^9'],
+    starter_templates: {
+      cpp: 'class Solution {\npublic:\n    int longestSubarray(vector<int>& nums, int limit) {\n        \n    }\n};',
+      python: 'class Solution:\n    def longestSubarray(self, nums: List[int], limit: int) -> int:\n        pass',
+      java: 'class Solution {\n    public int longestSubarray(int[] nums, int limit) {\n        \n    }\n}',
+      javascript: '/**\n * @param {number[]} nums\n * @param {number} limit\n * @return {number}\n */\nvar longestSubarray = function(nums, limit) {\n    \n};',
+    },
+    driver_code: {
+      cpp: 'int main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    int n, limit;\n    if (!(cin >> n >> limit)) return 0;\n    vector<int> nums(n);\n    for (int i = 0; i < n; i++) cin >> nums[i];\n    Solution sol;\n    cout << sol.longestSubarray(nums, limit) << "\\n";\n    return 0;\n}',
+      python: "if __name__ == '__main__':\n    import sys\n    tokens = sys.stdin.read().split()\n    if tokens:\n        n = int(tokens[0])\n        limit = int(tokens[1])\n        nums = [int(x) for x in tokens[2:2 + n]]\n        sol = Solution()\n        print(sol.longestSubarray(nums, limit))",
+      java: 'public class Main {\n    public static void main(String[] args) throws Exception {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int limit = sc.nextInt();\n        int[] nums = new int[n];\n        for (int i = 0; i < n; i++) nums[i] = sc.nextInt();\n        Solution sol = new Solution();\n        System.out.println(sol.longestSubarray(nums, limit));\n    }\n}',
+      javascript: "const fs = require('fs');\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\s+/);\nif (tokens.length >= 2 && tokens[0] !== '') {\n    const n = parseInt(tokens[0], 10);\n    const limit = parseInt(tokens[1], 10);\n    const nums = tokens.slice(2, 2 + n).map(Number);\n    const fn = typeof longestSubarray === 'function' ? longestSubarray : (typeof Solution !== 'undefined' ? new Solution().longestSubarray : null);\n    console.log(fn ? fn(nums, limit) : 0);\n}",
+    },
     test_cases: [
       { stdin: '4 4\n8 2 4 7\n', expected_output: '2', is_hidden: false },
       { stdin: '6 5\n10 1 2 4 7 2\n', expected_output: '4', is_hidden: false },
@@ -115,6 +151,18 @@ const INITIAL_OA_QUESTIONS: OAQuestion[] = [
       { input: '5\n1 2\n2 3\n3 4\n1 4\n1 5\n', output: '1 4', explanation: 'Edge [1, 4] completes redundant cycle.' },
     ],
     constraints: ['3 <= n <= 1000', '1 <= u < v <= n'],
+    starter_templates: {
+      cpp: 'class Solution {\npublic:\n    vector<int> findRedundantConnection(vector<vector<int>>& edges) {\n        \n    }\n};',
+      python: 'class Solution:\n    def findRedundantConnection(self, edges: List[List[int]]) -> List[int]:\n        pass',
+      java: 'class Solution {\n    public int[] findRedundantConnection(int[][] edges) {\n        \n    }\n}',
+      javascript: '/**\n * @param {number[][]} edges\n * @return {number[]}\n */\nvar findRedundantConnection = function(edges) {\n    \n};',
+    },
+    driver_code: {
+      cpp: 'int main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    int n;\n    if (!(cin >> n)) return 0;\n    vector<vector<int>> edges(n, vector<int>(2));\n    for (int i = 0; i < n; i++) cin >> edges[i][0] >> edges[i][1];\n    Solution sol;\n    vector<int> res = sol.findRedundantConnection(edges);\n    if (res.size() >= 2) cout << res[0] << " " << res[1] << "\\n";\n    return 0;\n}',
+      python: "if __name__ == '__main__':\n    import sys\n    tokens = sys.stdin.read().split()\n    if tokens:\n        n = int(tokens[0])\n        edges = []\n        idx = 1\n        for _ in range(n):\n            edges.append([int(tokens[idx]), int(tokens[idx + 1])])\n            idx += 2\n        sol = Solution()\n        res = sol.findRedundantConnection(edges)\n        print(f'{res[0]} {res[1]}')",
+      java: 'public class Main {\n    public static void main(String[] args) throws Exception {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int[][] edges = new int[n][2];\n        for (int i = 0; i < n; i++) { edges[i][0] = sc.nextInt(); edges[i][1] = sc.nextInt(); }\n        Solution sol = new Solution();\n        int[] res = sol.findRedundantConnection(edges);\n        System.out.println(res[0] + " " + res[1]);\n    }\n}',
+      javascript: "const fs = require('fs');\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\s+/);\nif (tokens.length >= 1 && tokens[0] !== '') {\n    const n = parseInt(tokens[0], 10);\n    const edges = [];\n    let idx = 1;\n    for (let i = 0; i < n; i++) { edges.push([Number(tokens[idx]), Number(tokens[idx + 1])]); idx += 2; }\n    const fn = typeof findRedundantConnection === 'function' ? findRedundantConnection : (typeof Solution !== 'undefined' ? new Solution().findRedundantConnection : null);\n    const res = fn ? fn(edges) : [0, 0];\n    console.log(`${res[0]} ${res[1]}`);\n}",
+    },
     test_cases: [
       { stdin: '3\n1 2\n1 3\n2 3\n', expected_output: '2 3', is_hidden: false },
       { stdin: '5\n1 2\n2 3\n3 4\n1 4\n1 5\n', expected_output: '1 4', is_hidden: false },
@@ -134,6 +182,18 @@ const INITIAL_OA_QUESTIONS: OAQuestion[] = [
       { input: '3 1\n', output: '2', explanation: '[1, 3, 2] and [2, 1, 3] each have 1 inverse pair.' },
     ],
     constraints: ['1 <= n <= 1000', '0 <= k <= 1000'],
+    starter_templates: {
+      cpp: 'class Solution {\npublic:\n    int kInversePairs(int n, int k) {\n        \n    }\n};',
+      python: 'class Solution:\n    def kInversePairs(self, n: int, k: int) -> int:\n        pass',
+      java: 'class Solution {\n    public int kInversePairs(int n, int k) {\n        \n    }\n}',
+      javascript: '/**\n * @param {number} n\n * @param {number} k\n * @return {number}\n */\nvar kInversePairs = function(n, k) {\n    \n};',
+    },
+    driver_code: {
+      cpp: 'int main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    int n, k;\n    if (!(cin >> n >> k)) return 0;\n    Solution sol;\n    cout << sol.kInversePairs(n, k) << "\\n";\n    return 0;\n}',
+      python: "if __name__ == '__main__':\n    import sys\n    tokens = sys.stdin.read().split()\n    if tokens:\n        n = int(tokens[0])\n        k = int(tokens[1])\n        sol = Solution()\n        print(sol.kInversePairs(n, k))",
+      java: 'public class Main {\n    public static void main(String[] args) throws Exception {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int k = sc.nextInt();\n        Solution sol = new Solution();\n        System.out.println(sol.kInversePairs(n, k));\n    }\n}',
+      javascript: "const fs = require('fs');\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\s+/);\nif (tokens.length >= 2 && tokens[0] !== '') {\n    const n = parseInt(tokens[0], 10);\n    const k = parseInt(tokens[1], 10);\n    const fn = typeof kInversePairs === 'function' ? kInversePairs : (typeof Solution !== 'undefined' ? new Solution().kInversePairs : null);\n    console.log(fn ? fn(n, k) : 0);\n}",
+    },
     test_cases: [
       { stdin: '3 0\n', expected_output: '1', is_hidden: false },
       { stdin: '3 1\n', expected_output: '2', is_hidden: false },

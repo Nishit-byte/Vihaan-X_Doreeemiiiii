@@ -57,7 +57,11 @@ You must handle two categories of profiles:
    `stdin` must be the exact raw string fed to standard input (including newlines if multi-line).
    `expected_output` must be the exact expected string printed to standard output.
 10. `starter_templates`: Object with keys "cpp", "python", "java", "javascript" containing authentic LeetCode `class Solution` method signatures (NO `int main()`, NO standard headers, clean empty method bodies with type annotations).
-11. `driver_code`: Object with keys "cpp", "python", "java", "javascript". `driver_code` must ONLY contain the stdin/stdout parsing harness (`int main()` for C++, `if __name__ == '__main__':` for Python, `public class Main` for Java, stdin reading script for JS) that instantiates `Solution` and calls its method. `driver_code` must NEVER define or redeclare `class Solution` and must NEVER include standard library headers or `#include` lines.
+11. `driver_code`: Object with keys "cpp", "python", "java", "javascript" where:
+    - "cpp": MUST contain a complete, compilable `int main()` that reads `stdin` matching the test cases, instantiates `Solution`, calls its method, and prints the result to `stdout`. It must NEVER define or redeclare `class Solution` and must NEVER include `#include` headers.
+    - "python": MUST contain `if __name__ == '__main__':` reading stdin from `sys.stdin.read().split()`, calling `Solution().<method>(...)`, and printing the result.
+    - "java": MUST contain `public class Main { public static void main(String[] args) throws Exception { ... } }` reading with `Scanner`, calling `new Solution().<method>(...)`, and printing the result.
+    - "javascript": MUST read `const fs = require('fs');` and print `console.log(...)` the result of `<method>(...)`.
 
 OUTPUT STRICT JSON ONLY with the key "oa_questions":
 {
@@ -80,10 +84,10 @@ OUTPUT STRICT JSON ONLY with the key "oa_questions":
         "javascript": "/**\\n * @param {number[]} nums\\n * @return {number}\\n */\\nvar solve = function(nums) {\\n    \\n};"
       },
       "driver_code": {
-        "cpp": "int main() { ... }",
-        "python": "if __name__ == '__main__': ...",
-        "java": "public class Main { ... }",
-        "javascript": "const fs = require('fs'); ..."
+        "cpp": "int main() {\\n    int n;\\n    if (cin >> n) {\\n        vector<int> nums(n);\\n        for (int i=0; i<n; i++) cin >> nums[i];\\n        Solution sol;\\n        cout << sol.solve(nums) << endl;\\n    }\\n    return 0;\\n}",
+        "python": "if __name__ == '__main__':\\n    import sys\\n    tokens = sys.stdin.read().split()\\n    if tokens:\\n        nums = [int(x) for x in tokens[1:]]\\n        print(Solution().solve(nums))",
+        "java": "public class Main {\\n    public static void main(String[] args) {\\n        Scanner sc = new Scanner(System.in);\\n        if (sc.hasNextInt()) {\\n            int n = sc.nextInt();\\n            int[] nums = new int[n];\\n            for (int i=0; i<n; i++) nums[i] = sc.nextInt();\\n            System.out.println(new Solution().solve(nums));\\n        }\\n    }\\n}",
+        "javascript": "const fs = require('fs');\\nconst tokens = fs.readFileSync(0, 'utf-8').trim().split(/\\\\s+/);\\nif (tokens.length > 0 && tokens[0] !== '') {\\n    const nums = tokens.slice(1).map(Number);\\n    const fn = typeof solve === 'function' ? solve : (typeof Solution !== 'undefined' ? new Solution().solve : null);\\n    console.log(fn ? fn(nums) : 0);\\n}"
       },
       "test_cases": [
         {"stdin": "3\\n1 2 3\\n", "expected_output": "6", "is_hidden": false},
