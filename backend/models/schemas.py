@@ -156,14 +156,31 @@ class IngestRepoRequest(BaseModel):
     use_demo_cache: bool = False
 
 
+class LeetCodeProfileSummary(BaseModel):
+    username: str
+    total_solved: int = 0
+    easy_solved: int = 0
+    medium_solved: int = 0
+    hard_solved: int = 0
+    weak_topics: List[str] = Field(default_factory=list)
+    recent_submissions: List[str] = Field(default_factory=list)
+    fetched_live: bool = False
+
+
+class IngestDsaRequest(BaseModel):
+    leetcode_username: str
+    topic: str = "Arrays & Hashing"
+
+
 class IngestResponse(BaseModel):
     session_id: str
-    mode: Literal["repo", "paper"]
+    mode: Literal["repo", "paper", "dsa"]
     title: str
     authors: List[str] = Field(default_factory=list)
     files: List[RepoFile] = Field(default_factory=list)
     mermaid_graph: Optional[str] = None
     paper_nodes: List[PaperNode] = Field(default_factory=list)
+    dsa_profile: Optional[LeetCodeProfileSummary] = None
     initial_turn: TurnResponse
 
 
@@ -194,7 +211,7 @@ class CodeVerificationSummary(BaseModel):
 
 class VivaReport(BaseModel):
     session_id: str
-    mode: Literal["repo", "paper"]
+    mode: Literal["repo", "paper", "dsa"]
     candidate_name: Optional[str] = None
     overall_score: float = Field(..., ge=0, le=100)
     rubric_scores: RubricScores
