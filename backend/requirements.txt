@@ -1,0 +1,23 @@
+# VivaVoce Backend Dependencies (Modular Monolith)
+# Owner: Member 1 (Nishit - Team Lead & AI Brain Engineer)
+
+# Core Web Framework & Validation (M1)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.9.0
+python-dotenv>=1.0.1
+python-multipart>=0.0.12
+httpx>=0.27.2
+
+# LLM & AI Brain (M1)
+google-genai>=1.0.0
+google-generativeai>=0.8.3
+
+# Repository AST, Git Blame, PDF Parsing & Sandbox Verification (M2)
+GitPython>=3.1.43
+PyMuPDF>=1.24.13
+pytest>=8.3.3
+
+# Voice STT & TTS Pipeline (M3)
+groq>=0.11.0
+edge-tts>=6.1.12
