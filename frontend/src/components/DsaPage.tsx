@@ -37,7 +37,7 @@ import type {
   OAQuestion,
   VivaReport,
 } from '../types/api'
-import { useProctor, ProctorStatusPill } from '../context/ProctorContext'
+import { useProctor, ProctorStatusPill, triggerFullscreen } from '../context/ProctorContext'
 
 // Initial dynamic starter questions
 const INITIAL_OA_QUESTIONS: OAQuestion[] = [
@@ -247,20 +247,15 @@ export default function DsaPage({ onBack }: Props) {
   }
 
   // Open a specific question in the LeetCode Compiler Screen
-  const launchQuestion = async (idx: number) => {
-    try {
-      if (!document.fullscreenElement && document.documentElement) {
-        await document.documentElement.requestFullscreen()
-      }
-    } catch (e) {
-      console.warn('Could not enter fullscreen:', e)
-    }
+  const launchQuestion = (idx: number) => {
+    // 1. Synchronously trigger fullscreen as line 1
+    triggerFullscreen()
     setActiveQuestionIdx(idx)
     const sid = activeSessionId || `oa_${Date.now()}`
     if (!activeSessionId) {
       setActiveSessionId(sid)
     }
-    await startProctoredSession(sid)
+    startProctoredSession(sid)
   }
 
   const markQuestionSolved = (qid: string) => {
@@ -416,8 +411,12 @@ export default function DsaPage({ onBack }: Props) {
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
             {!activeSessionId ? (
               <button
+                type="button"
                 className="btn-primary"
-                onClick={() => launchQuestion(0)}
+                onClick={() => {
+                  triggerFullscreen()
+                  launchQuestion(0)
+                }}
                 disabled={ingesting}
                 style={{ padding: '8px 20px', fontSize: 14, background: '#0891b2' }}
               >
@@ -732,7 +731,11 @@ export default function DsaPage({ onBack }: Props) {
                     </div>
 
                     <button
-                      onClick={() => launchQuestion(idx)}
+                      type="button"
+                      onClick={() => {
+                        triggerFullscreen()
+                        launchQuestion(idx)
+                      }}
                       disabled={ingesting}
                       className="btn-primary shrink-0"
                       style={{
