@@ -22,3 +22,7 @@ frontend/.vite/
 Thumbs.db
 .vscode/
 .idea/
+
+# Extra env variants and build output
+.env.*
+dist/
