@@ -1,24 +1,15 @@
-"""
-Multi-Language Isolated Code Sandbox Runner (backend/sandbox/sandbox_runner.py).
-Owner: Senior Full-Stack Engineer (VivaVoce)
+"""Sandbox execution runner: pytest sandboxed with a timeout and process-tree cleanup.
 
-Executes candidate code across C++, Python, Java, and JavaScript inside an
-isolated temporary directory with standard input/output evaluation against
-test cases.
-
-Features:
-- Time limit: 4.0 seconds per testcase
-- C++ (g++ 20 / C++17): g++ -O2 -std=c++17 main.cpp -o main.exe
-- Python 3: python main.py
-- Java: javac Main.java && java Main
-- JavaScript: node main.js
-- Custom input execution
-- Detailed per-testcase execution feedback and real verdicts
-- Backward compatibility for Repo Viva pytest verification
+Wording convention: student code is 'sandboxed with a timeout'.
+Note: the child gets a minimal env dict (no API keys) and a time limit, but it runs as the
+same OS user: it can still read files (e.g. backend/.env), read ancestor processes'
+environments (e.g. via psutil), and use the network.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import re
 import shutil
@@ -27,636 +18,662 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-from backend.models.schemas import (
-    OATestCase,
-    RunCodeResponse,
-    TestCaseResult,
-)
+try:
+    from ..ingestion.config import SANDBOX_OUTPUT_LIMIT, SANDBOX_TIMEOUT_S
+    from ..ingestion.models import SandboxResult
+except ImportError:
+    from ingestion.config import SANDBOX_OUTPUT_LIMIT, SANDBOX_TIMEOUT_S
+    from ingestion.models import SandboxResult
+
+from .multi_language import execute_multi_language_sandbox  # re-export, team code
+
+log = logging.getLogger("vivavoce.sandbox")
+
+SANDBOX_COPY_MAX_BYTES = 10 * 1024 * 1024  # Cap ~10 MB
+
+SKIP_DIR_NAMES = {
+    ".git",
+    "venv",
+    ".venv",
+    "env",
+    ".env",
+    "node_modules",
+    "site-packages",
+    "migrations",
+    "build",
+    "dist",
+    "__pycache__",
+    ".tox",
+    ".nox",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+}
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    CREATE_SUSPENDED = 0x00000004
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+    JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008  # caps fork bombs
+    JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200  # caps memory bombs
+    JobObjectExtendedLimitInformation = 9
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryLimit", ctypes.c_size_t),
+            ("PeakJobMemoryLimit", ctypes.c_size_t),
+        ]
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ntdll = ctypes.WinDLL("ntdll")
+
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        ntdll.NtResumeProcess.restype = wintypes.LONG
+        ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    except Exception as exc:
+        log.warning("Failed to initialize Windows Job Object functions: %s", exc)
+        kernel32 = None  # type: ignore
+        ntdll = None  # type: ignore
+else:
+    kernel32 = None  # type: ignore
+    ntdll = None  # type: ignore
 
 
-def _sanitize_cpp_code(code: str) -> str:
+def _validate_relative_path(file_path: str, temp_dir: Path) -> Path:
+    """Validate that file_path is relative, has no '..' segments, and stays in temp_dir."""
+    if not isinstance(file_path, str):
+        raise ValueError("file_path must be a string")
+    if "\0" in file_path:
+        raise ValueError("file_path cannot contain NUL bytes")
+    raw = file_path.strip().replace("\\", "/")
+    if not raw:
+        raise ValueError("file_path cannot be empty")
+    if raw.startswith("/") or raw.startswith("\\"):
+        raise ValueError("file_path must be a relative path")
+    parts = [p for p in raw.split("/") if p]
+    if ".." in parts:
+        raise ValueError("file_path cannot contain '..' segments")
+    p = Path(raw)
+    if p.is_absolute() or re.match(r"^[A-Za-z]:", raw):
+        raise ValueError("file_path must be a relative path")
+    if p.name == "test_vivavoce_challenge.py":
+        raise ValueError(
+            "file_path cannot be 'test_vivavoce_challenge.py' (reserved for test harness)"
+        )
+    target = (temp_dir / p).resolve()
+    temp_dir_resolved = temp_dir.resolve()
+    try:
+        target.relative_to(temp_dir_resolved)
+    except ValueError:
+        raise ValueError("file_path must stay inside the sandbox directory")
+    if target == temp_dir_resolved:
+        raise ValueError("file_path cannot be the sandbox root directory")
+    return target
+
+
+def _copy_repo_files(
+    repo_root: Path,
+    temp_dir: Path,
+    max_bytes: int = SANDBOX_COPY_MAX_BYTES,
+) -> int:
+    """Copy all .py files from repo_root into temp_dir, preserving folder structure.
+
+    Skips .git, venvs, node_modules, site-packages, migrations, build/dist, __pycache__,
+    caches, symlinks, and stops if aggregate copied bytes exceed max_bytes (~10 MB).
+    Package __init__.py files are preserved. Re-implemented locally without importing lane A.
+
+    Returns total bytes copied.
     """
-    Sanitizes C++ source and driver code to fix common LLM formatting quirks:
-    - Replaces invalid directives like `#iostream` or `#vector` with `#include <iostream>`
-    - Corrects `#include<iostream>` or `#include iostream` to `#include <iostream>`
-    - Sanitizes unrecognized invalid preprocessor directives that break g++
-    """
-    if not code:
-        return ""
+    total_bytes = 0
+    repo_root = repo_root.resolve()
 
-    valid_directives = {
-        "include", "define", "ifdef", "ifndef", "endif", "if", "else", "elif",
-        "pragma", "line", "error", "warning", "undef"
-    }
-    known_headers = {
-        "iostream", "vector", "string", "algorithm", "cmath", "climits", "map", "set",
-        "queue", "deque", "stack", "sstream", "iomanip", "bits/stdc++.h", "cstdio",
-        "cstring", "cstdlib", "cassert", "numeric", "functional", "tuple", "utility",
-        "chrono", "random", "unordered_map", "unordered_set", "list", "forward_list",
-        "bitset", "regex", "fstream", "cctype"
-    }
+    for root, dirs, files in os.walk(repo_root, followlinks=False):
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in SKIP_DIR_NAMES
+            and not d.endswith(".egg-info")
+            and not d.endswith(".dist-info")
+            and not os.path.islink(os.path.join(root, d))
+        ]
 
-    sanitized_lines = []
-    for line in code.splitlines():
-        # Match standard directives: e.g. #include <iostream>, #include<vector>, #define X
-        m = re.match(r"^\s*#\s*([a-zA-Z_][a-zA-Z0-9_]*)(.*)", line)
-        if m:
-            directive = m.group(1).strip()
-            rest = m.group(2).strip()
-            if directive in valid_directives:
-                if directive == "include":
-                    if rest.startswith('"') and rest.endswith('"'):
-                        line = f"#include {rest}"
-                    else:
-                        header_name = rest.strip('<>" \t')
-                        if header_name:
-                            line = f"#include <{header_name}>"
-                        else:
-                            line = "// [sanitized empty include]"
-            elif directive in known_headers:
-                line = f"#include <{directive}>"
-            else:
-                line = f"// [sanitized] {line}"
-        else:
-            # Check for naked #<header>
-            m_angle = re.match(r"^\s*#\s*<([a-zA-Z0-9_/\.]+)>", line)
-            if m_angle:
-                line = f"#include <{m_angle.group(1)}>"
-            elif re.match(r"^\s*#\s*[^\s]", line):
-                # Any unrecognized line starting with # that isn't a valid directive
-                line = f"// [sanitized] {line}"
-
-        sanitized_lines.append(line)
-    return "\n".join(sanitized_lines)
-
-
-def _strip_solution_class_braces(code: str) -> str:
-    """Removes any class Solution { ... }; block using brace-depth matching, ignoring strings and comments."""
-    if not code:
-        return ""
-    pattern = re.compile(r"\b(?:(?:public|private|protected)\s+)?class\s+Solution\b[^{]*\{")
-    max_loops = 5
-    while max_loops > 0:
-        max_loops -= 1
-        match = pattern.search(code)
-        if not match:
-            break
-        start = match.start()
-        depth = 1
-        pos = match.end()
-        n = len(code)
-        in_line_comment = False
-        in_block_comment = False
-        in_str = None
-
-        while pos < n and depth > 0:
-            ch = code[pos]
-            if in_line_comment:
-                if ch == '\n':
-                    in_line_comment = False
-            elif in_block_comment:
-                if ch == '*' and pos + 1 < n and code[pos + 1] == '/':
-                    in_block_comment = False
-                    pos += 1
-            elif in_str:
-                if ch == '\\':
-                    pos += 1  # skip escaped character
-                elif ch == in_str:
-                    in_str = None
-            else:
-                if ch == '/' and pos + 1 < n and code[pos + 1] == '/':
-                    in_line_comment = True
-                    pos += 1
-                elif ch == '/' and pos + 1 < n and code[pos + 1] == '*':
-                    in_block_comment = True
-                    pos += 1
-                elif ch in ('"', "'"):
-                    in_str = ch
-                elif ch == '{':
-                    depth += 1
-                elif ch == '}':
-                    depth -= 1
-            pos += 1
-
-        if depth == 0:
-            while pos < n and code[pos] in (' ', '\t', ';'):
-                pos += 1
-            if pos < n and code[pos] == '\n':
-                pos += 1
-            code = code[:start] + code[pos:]
-        else:
-            # Unmatched braces: abort safely without truncating file
-            break
-
-    return code
-
-
-def _clean_driver_cpp(code: str) -> str:
-    """Strips class Solution, duplicate #include and using namespace lines from driver_code."""
-    if not code:
-        return ""
-    sanitized = _sanitize_cpp_code(code)
-    stripped = _strip_solution_class_braces(sanitized)
-    
-    # If stripping somehow removed main, recover from sanitized
-    if "main(" not in stripped and "main(" in sanitized:
-        main_pos = sanitized.find("int main")
-        if main_pos == -1:
-            main_pos = sanitized.find("main(")
-        if main_pos != -1:
-            stripped = sanitized[main_pos:]
-        else:
-            stripped = sanitized
-
-    lines = []
-    for line in stripped.splitlines():
-        trimmed = line.strip()
-        if (
-            trimmed.startswith("#include")
-            or trimmed.startswith("// [sanitized]")
-            or trimmed == "using namespace std;"
-            or re.match(r"^\s*#\s*iostream\b", trimmed)
-            or re.match(r"^\s*#\s*vector\b", trimmed)
-            or re.match(r"^\s*#\s*string\b", trimmed)
-        ):
-            continue
-        lines.append(line)
-    return "\n".join(lines).strip()
-
-
-def _generate_fallback_cpp_main(source_code: str) -> Optional[str]:
-    """
-    Synthesizes a minimal C++ stdin/stdout driver by inspecting public methods in class Solution.
-    Handles standard single-method classes with strings, integers, and vectors.
-    """
-    if not source_code:
-        return None
-
-    # Find public method in class Solution
-    pattern = re.compile(
-        r"(?:int|bool|string|long\s+long|double|void|vector<int>|vector<string>)\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)"
-    )
-    match = pattern.search(source_code)
-    if not match:
-        return None
-
-    method_name = match.group(1)
-    if method_name in ("main", "if", "for", "while", "switch"):
-        return None
-
-    raw_params = [p.strip() for p in match.group(2).split(",") if p.strip()]
-    if not raw_params:
-        return (
-            "int main() {\n"
-            "    ios::sync_with_stdio(false);\n"
-            "    cin.tie(nullptr);\n"
-            "    Solution sol;\n"
-            f"    cout << sol.{method_name}() << \"\\n\";\n"
-            "    return 0;\n"
-            "}"
-        )
-
-    # Detect parameter types
-    if len(raw_params) == 2 and "string" in raw_params[0] and "int" in raw_params[1]:
-        return (
-            "int main() {\n"
-            "    ios::sync_with_stdio(false);\n"
-            "    cin.tie(nullptr);\n"
-            "    string s;\n"
-            "    int k;\n"
-            "    if (cin >> s >> k) {\n"
-            "        Solution sol;\n"
-            f"        cout << sol.{method_name}(s, k) << \"\\n\";\n"
-            "    }\n"
-            "    return 0;\n"
-            "}"
-        )
-    elif len(raw_params) == 2 and "vector<int>" in raw_params[0] and "int" in raw_params[1]:
-        return (
-            "int main() {\n"
-            "    ios::sync_with_stdio(false);\n"
-            "    cin.tie(nullptr);\n"
-            "    int n, k;\n"
-            "    if (cin >> n >> k) {\n"
-            "        vector<int> nums(n);\n"
-            "        for (int i = 0; i < n; i++) cin >> nums[i];\n"
-            "        Solution sol;\n"
-            f"        cout << sol.{method_name}(nums, k) << \"\\n\";\n"
-            "    }\n"
-            "    return 0;\n"
-            "}"
-        )
-    elif len(raw_params) == 1 and "vector<int>" in raw_params[0]:
-        return (
-            "int main() {\n"
-            "    ios::sync_with_stdio(false);\n"
-            "    cin.tie(nullptr);\n"
-            "    int n;\n"
-            "    if (cin >> n) {\n"
-            "        vector<int> nums(n);\n"
-            "        for (int i = 0; i < n; i++) cin >> nums[i];\n"
-            "        Solution sol;\n"
-            f"        cout << sol.{method_name}(nums) << \"\\n\";\n"
-            "    }\n"
-            "    return 0;\n"
-            "}"
-        )
-    elif len(raw_params) == 1 and "string" in raw_params[0]:
-        return (
-            "int main() {\n"
-            "    ios::sync_with_stdio(false);\n"
-            "    cin.tie(nullptr);\n"
-            "    string s;\n"
-            "    if (cin >> s) {\n"
-            "        Solution sol;\n"
-            f"        cout << sol.{method_name}(s) << \"\\n\";\n"
-            "    }\n"
-            "    return 0;\n"
-            "}"
-        )
-
-    return None
-
-
-def _clean_driver_java(code: str) -> str:
-    """Strips class Solution and duplicate import lines from driver_code."""
-    if not code:
-        return ""
-    code = _strip_solution_class_braces(code)
-    lines = []
-    for line in code.splitlines():
-        trimmed = line.strip()
-        if trimmed.startswith("import java."):
-            continue
-        lines.append(line)
-    return "\n".join(lines).strip()
-
-
-def _clean_driver_python(code: str) -> str:
-    """Strips class Solution and duplicate import lines from Python driver_code."""
-    if not code:
-        return ""
-    lines = code.splitlines()
-    cleaned = []
-    in_solution = False
-    for line in lines:
-        stripped = line.strip()
-        if re.match(r"^class\s+Solution\b", stripped):
-            in_solution = True
-            continue
-        if in_solution:
-            if not stripped or line.startswith((" ", "\t")):
+        for file_name in files:
+            if not file_name.endswith(".py"):
                 continue
-            else:
-                in_solution = False
-        if stripped.startswith((
-            "import sys", "from typing import", "import collections",
-            "import heapq", "import math", "import bisect"
-        )):
-            continue
-        cleaned.append(line)
-    return "\n".join(cleaned).strip()
+
+            full_path = os.path.join(root, file_name)
+            if os.path.islink(full_path):
+                continue
+
+            try:
+                rel_path = Path(full_path).relative_to(repo_root)
+            except ValueError:
+                continue
+
+            if any(
+                p in SKIP_DIR_NAMES
+                or p.endswith(".egg-info")
+                or p.endswith(".dist-info")
+                for p in rel_path.parts[:-1]
+            ):
+                continue
+
+            if rel_path == Path("test_vivavoce_challenge.py"):
+                continue
+
+            try:
+                file_size = os.path.getsize(full_path)
+            except OSError:
+                continue
+
+            if total_bytes + file_size > max_bytes:
+                log.warning(
+                    "Sandbox repo copy exceeded %d bytes limit; stopped copying at %d bytes",
+                    max_bytes,
+                    total_bytes,
+                )
+                return total_bytes
+
+            dest_path = temp_dir / rel_path
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(full_path, dest_path)
+                total_bytes += file_size
+            except OSError as exc:
+                log.warning("Failed to copy %s to sandbox: %s", full_path, exc)
+
+    return total_bytes
 
 
-def _clean_driver_javascript(code: str) -> str:
-    """Strips class Solution / var Solution and duplicate fs imports from JS driver_code."""
-    if not code:
-        return ""
-    code = _strip_solution_class_braces(code)
-    lines = []
-    for line in code.splitlines():
-        trimmed = line.strip()
-        if trimmed.startswith("const fs = require('fs')") or trimmed.startswith('const fs = require("fs")'):
-            continue
-        lines.append(line)
-    return "\n".join(lines).strip()
+def _build_minimal_env(temp_dir_path: Path) -> dict[str, str]:
+    """Build a brand-new minimal environment dictionary without copying os.environ.
 
+    Contains only essential system paths and forces non-persistent, safe python settings.
+    No parent API keys or secrets are propagated.
+    """
+    temp_str = str(temp_dir_path)
+    env: dict[str, str] = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "TEMP": temp_str,
+        "TMP": temp_str,
+        "HOME": temp_str,
+        "USERPROFILE": temp_str,
+    }
+    # Windows system environment variables needed for system DLLs and processes
+    if "SYSTEMROOT" in os.environ:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    elif sys.platform == "win32":
+        env["SYSTEMROOT"] = r"C:\Windows"
 
-def _minimal_environment() -> dict[str, str]:
-    allowed_keys = ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP")
-    env = {k: os.environ[k] for k in allowed_keys if k in os.environ}
-    env["PYTHONNOUSERSITE"] = "1"
-    env["PYTHONIOENCODING"] = "utf-8"
+    if "WINDIR" in os.environ:
+        env["WINDIR"] = os.environ["WINDIR"]
+    elif sys.platform == "win32":
+        env["WINDIR"] = r"C:\Windows"
+
+    if "SYSTEMDRIVE" in os.environ:
+        env["SYSTEMDRIVE"] = os.environ["SYSTEMDRIVE"]
+
     return env
 
 
-def execute_multi_language_sandbox(
-    language: str,
-    source_code: str,
-    test_cases: List[OATestCase],
-    run_hidden: bool = False,
-    custom_input: Optional[str] = None,
-    driver_code: Optional[str] = None,
-) -> RunCodeResponse:
-    """
-    Compiles (if needed) and executes source code against given test cases or custom input.
-    Automatically prepends standard language headers and appends problem driver_code
-    so candidate only needs to write inside authentic LeetCode class Solution.
-    Returns real verdict: Accepted, Wrong Answer, Compilation Error, Runtime Error, Time Limit Exceeded.
-    """
-    lang_clean = (language or "python").lower().strip()
-    started = time.perf_counter()
-
-    with tempfile.TemporaryDirectory(prefix="vivavoce-oa-") as temp_dir:
-        root = Path(temp_dir)
-        env = _minimal_environment()
-
-        # Determine target file and compile command
-        executable_cmd: List[str] = []
-
-        if lang_clean in ("cpp", "c++", "c"):
-            src_file = root / "main.cpp"
-            sanitized_source = _sanitize_cpp_code(source_code)
-            cleaned_driver = _clean_driver_cpp(driver_code) if driver_code else ""
-
-            has_source_main = bool(re.search(r"\b(?:int|void)\s+main\s*\(", sanitized_source))
-            if not has_source_main:
-                has_driver_main = bool(re.search(r"\b(?:int|void)\s+main\s*\(", cleaned_driver))
-                if not has_driver_main:
-                    fallback = _generate_fallback_cpp_main(sanitized_source)
-                    if fallback:
-                        cleaned_driver = fallback
-                    else:
-                        return RunCodeResponse(
-                            passed=False,
-                            verdict="Compilation Error",
-                            stdout="",
-                            stderr="Missing main() entrypoint in execution driver.",
-                            runtime_ms=int((time.perf_counter() - started) * 1000),
-                            test_results=[],
-                            total_cases=len(test_cases),
-                            passed_cases=0,
-                        )
-                effective_code = f"#include <bits/stdc++.h>\nusing namespace std;\n\n{sanitized_source}\n\n{cleaned_driver}"
-            else:
-                effective_code = f"#include <bits/stdc++.h>\nusing namespace std;\n\n{sanitized_source}"
-            src_file.write_text(effective_code, encoding="utf-8")
-            exe_path = root / ("main.exe" if sys.platform == "win32" else "main")
-
-            # Look up g++ binary
-            gpp_cmd = shutil.which("g++") or "g++"
-            compile_res = subprocess.run(
-                [gpp_cmd, "-O2", "-std=c++17", str(src_file), "-o", str(exe_path)],
-                cwd=root,
-                env=env,
+def _kill_process_tree(pid: int) -> None:
+    """Kill the process and its entire process tree (on Windows: taskkill /T /F /PID)."""
+    if pid <= 0:
+        return
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
                 capture_output=True,
-                text=True,
-                timeout=10,
                 check=False,
+                timeout=5,
             )
-            if compile_res.returncode != 0:
-                return RunCodeResponse(
-                    passed=False,
-                    verdict="Compilation Error",
-                    stdout="",
-                    stderr=compile_res.stderr or compile_res.stdout or "Compilation failed.",
-                    runtime_ms=int((time.perf_counter() - started) * 1000),
-                    test_results=[],
-                    total_cases=len(test_cases),
-                    passed_cases=0,
-                )
-            executable_cmd = [str(exe_path)]
+        except Exception as exc:
+            log.warning("taskkill failed for PID %d: %s", pid, exc)
+    else:
+        # POSIX process group kill fallback
+        try:
+            import signal
 
-        elif lang_clean in ("java", "openjdk"):
-            src_file = root / "Main.java"
-            sanitized_source = re.sub(r"\bpublic\s+class\s+Solution\b", "class Solution", source_code)
-            cleaned_driver = _clean_driver_java(driver_code) if driver_code else ""
-            if "public static void main" not in sanitized_source:
-                effective_code = f"import java.io.*;\nimport java.util.*;\n\n{sanitized_source}\n\n{cleaned_driver}"
-            else:
-                effective_code = f"import java.io.*;\nimport java.util.*;\n\n{sanitized_source}"
-            src_file.write_text(effective_code, encoding="utf-8")
-
-            javac_cmd = shutil.which("javac") or "javac"
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except Exception:
             try:
-                compile_res = subprocess.run(
-                    [javac_cmd, str(src_file)],
-                    cwd=root,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    check=False,
-                )
-                if compile_res.returncode != 0:
-                    return RunCodeResponse(
-                        passed=False,
-                        verdict="Compilation Error",
-                        stdout="",
-                        stderr=compile_res.stderr or "Java compilation failed.",
-                        runtime_ms=int((time.perf_counter() - started) * 1000),
-                        test_results=[],
-                        total_cases=len(test_cases),
-                        passed_cases=0,
-                    )
-            except OSError as exc:
-                return RunCodeResponse(
-                    passed=False,
-                    verdict="Compilation Error",
-                    stdout="",
-                    stderr=f"Java compiler (javac) not found: {exc}",
-                    runtime_ms=int((time.perf_counter() - started) * 1000),
-                    test_results=[],
-                    total_cases=len(test_cases),
-                    passed_cases=0,
-                )
+                import signal
 
-            java_cmd = shutil.which("java") or "java"
-            executable_cmd = [java_cmd, "-cp", str(root), "Main"]
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
 
-        elif lang_clean in ("javascript", "js", "node"):
-            src_file = root / "main.js"
-            cleaned_driver = _clean_driver_javascript(driver_code) if driver_code else ""
-            if "readFileSync" not in source_code:
-                effective_code = f"const fs = require('fs');\n\n{source_code}\n\n{cleaned_driver}"
-            else:
-                effective_code = source_code
-            src_file.write_text(effective_code, encoding="utf-8")
-            node_cmd = shutil.which("node") or "node"
-            executable_cmd = [node_cmd, str(src_file)]
 
-        else:
-            # Default: Python
-            src_file = root / "main.py"
-            cleaned_driver = _clean_driver_python(driver_code) if driver_code else ""
-            if "__main__" not in source_code:
-                effective_code = f"from typing import *\nimport sys, math, heapq, bisect, collections\n\n{source_code}\n\n{cleaned_driver}"
-            else:
-                effective_code = source_code
-            src_file.write_text(effective_code, encoding="utf-8")
-            executable_cmd = [sys.executable, str(src_file)]
+def _truncate_output(text: str, limit: int) -> str:
+    """Truncate text to limit characters, preserving the tail where summaries live."""
+    if len(text) <= limit:
+        return text
+    prefix = "[... truncated ...]\n"
+    if limit <= len(prefix):
+        return text[:limit]
+    return prefix + text[-(limit - len(prefix)) :]
 
-        # Determine which test cases to run
-        active_cases: List[OATestCase] = []
-        if custom_input is not None:
-            active_cases = [OATestCase(stdin=custom_input, expected_output="", is_hidden=False)]
-        else:
-            active_cases = [tc for tc in test_cases if run_hidden or not tc.is_hidden]
-            if not active_cases and test_cases:
-                active_cases = test_cases  # fallback to all if no visible
 
-        test_results: List[TestCaseResult] = []
-        passed_count = 0
-        overall_verdict = "Accepted"
-        last_stderr = ""
-        total_stdout = ""
+def _read_output_tail(file_path: Path, limit: int) -> str:
+    """Read at most the tail of a file, decoding as UTF-8 and truncating to limit chars."""
+    if not file_path.exists():
+        return ""
+    try:
+        file_size = file_path.stat().st_size
+    except OSError:
+        return ""
+    if file_size == 0:
+        return ""
+    bytes_to_read = min(file_size, limit * 4)
+    try:
+        with open(file_path, "rb") as f:
+            if file_size > bytes_to_read:
+                f.seek(file_size - bytes_to_read)
+            raw_bytes = f.read()
+    except OSError:
+        return ""
+    text = raw_bytes.decode("utf-8", errors="replace")
+    return _truncate_output(text, limit)
 
-        for idx, tc in enumerate(active_cases, start=1):
-            try:
-                run_res = subprocess.run(
-                    executable_cmd,
-                    cwd=root,
-                    env=env,
-                    input=tc.stdin,
-                    capture_output=True,
-                    text=True,
-                    timeout=4.0,
-                    check=False,
-                )
-                actual_out = run_res.stdout
-                actual_err = run_res.stderr
 
-                if run_res.returncode != 0:
-                    overall_verdict = "Runtime Error"
-                    last_stderr = actual_err or f"Process exited with code {run_res.returncode}"
-                    test_results.append(
-                        TestCaseResult(
-                            case_num=idx,
-                            stdin=tc.stdin,
-                            expected_output=tc.expected_output,
-                            actual_output=actual_out,
-                            passed=False,
-                            is_hidden=tc.is_hidden,
-                            error=last_stderr,
-                        )
-                    )
-                    break
+def _parse_pytest_output(
+    stdout: str, stderr: str, returncode: int
+) -> tuple[bool, int, int, Optional[str]]:
+    """Parse pass/fail counts and status from pytest output.
 
-                expected_clean = tc.expected_output.strip()
-                actual_clean = actual_out.strip()
+    Returns (passed, tests_passed, tests_failed, error).
+    """
+    combined = f"{stdout}\n{stderr}"
 
-                # If checking against expected output (standard testcase)
-                is_custom = custom_input is not None
-                passed = is_custom or (actual_clean == expected_clean)
-                if passed and not is_custom:
-                    passed_count += 1
-                elif not passed:
-                    if overall_verdict == "Accepted":
-                        overall_verdict = "Wrong Answer"
+    # Take the LAST match: pytest's summary line comes after any captured test output
+    passed_match = re.findall(r"\b(\d+)\s+passed\b", combined)
+    failed_match = re.findall(r"\b(\d+)\s+failed\b", combined)
+    error_match = re.findall(r"\b(\d+)\s+error(?:s)?\b", combined)
 
-                total_stdout += actual_out
-                test_results.append(
-                    TestCaseResult(
-                        case_num=idx,
-                        stdin=tc.stdin,
-                        expected_output=tc.expected_output,
-                        actual_output=actual_out,
-                        passed=passed,
-                        is_hidden=tc.is_hidden,
-                        error=None,
-                    )
-                )
+    tests_passed = int(passed_match[-1]) if passed_match else 0
+    tests_failed = int(failed_match[-1]) if failed_match else 0
+    errors_count = int(error_match[-1]) if error_match else 0
 
-            except subprocess.TimeoutExpired:
-                overall_verdict = "Time Limit Exceeded"
-                last_stderr = "Time limit exceeded (4.0s)."
-                test_results.append(
-                    TestCaseResult(
-                        case_num=idx,
-                        stdin=tc.stdin,
-                        expected_output=tc.expected_output,
-                        actual_output="",
-                        passed=False,
-                        is_hidden=tc.is_hidden,
-                        error="Execution timed out after 4 seconds.",
-                    )
-                )
-                break
-            except OSError as exc:
-                overall_verdict = "Runtime Error"
-                last_stderr = str(exc)
-                test_results.append(
-                    TestCaseResult(
-                        case_num=idx,
-                        stdin=tc.stdin,
-                        expected_output=tc.expected_output,
-                        actual_output="",
-                        passed=False,
-                        is_hidden=tc.is_hidden,
-                        error=str(exc),
-                    )
-                )
-                break
+    # Clean exit code with real passes is authoritative (warning text may mention "SyntaxError:")
+    if returncode == 0 and tests_passed > 0 and tests_failed == 0 and errors_count == 0:
+        return True, tests_passed, 0, None
 
-    runtime_ms = int((time.perf_counter() - started) * 1000)
-    all_passed = (passed_count == len(active_cases)) and len(active_cases) > 0 and overall_verdict == "Accepted"
+    # Handle 'no tests ran'
+    if "no tests ran" in combined:
+        return False, 0, 0, "No tests ran"
 
-    return RunCodeResponse(
-        passed=all_passed or (custom_input is not None and overall_verdict != "Runtime Error"),
-        verdict=overall_verdict if custom_input is None else "Executed",
-        stdout=total_stdout,
-        stderr=last_stderr,
-        runtime_ms=runtime_ms,
-        test_results=test_results,
-        total_cases=len(active_cases),
-        passed_cases=passed_count,
-    )
+    # Handle SyntaxError
+    syntax_match = re.search(r"SyntaxError:\s*([^\n\r]+)", combined)
+    if syntax_match:
+        return False, tests_passed, tests_failed, f"SyntaxError: {syntax_match.group(1).strip()}"
+
+    # Handle collection errors
+    if "error during collection" in combined or "ERROR collecting" in combined:
+        mod_match = re.search(
+            r"((?:ModuleNotFoundError|ImportError|NameError|AttributeError):\s*[^\n\r]+)",
+            combined,
+        )
+        if mod_match:
+            return (
+                False,
+                tests_passed,
+                tests_failed,
+                f"Collection error: {mod_match.group(1).strip()}",
+            )
+        return False, tests_passed, tests_failed, "Collection error during pytest discovery"
+
+    # Successful run with passed tests and no failures or errors
+    if returncode == 0 and tests_passed > 0 and tests_failed == 0 and errors_count == 0:
+        return True, tests_passed, 0, None
+
+    # Failed test run
+    if returncode != 0:
+        if tests_failed > 0 or errors_count > 0:
+            return False, tests_passed, tests_failed + errors_count, None
+        return False, tests_passed, tests_failed, f"Pytest failed with exit code {returncode}"
+
+    # Returncode is 0 but no passed tests
+    return (tests_passed > 0 and tests_failed == 0), tests_passed, tests_failed, None
 
 
 def execute_verification(
     file_path: str,
     student_code: str,
     test_code: str,
-) -> RunCodeResponse:
-    """Legacy backward-compatible pytest runner for Repo Viva L4 code verification."""
+    repo_root: Optional[str] = None,
+) -> SandboxResult:
+    """Execute pytest against student code in a temporary directory with timeout.
+
+    Runs student code sandboxed with a timeout. Never raises exceptions.
+    """
     started = time.perf_counter()
-    with tempfile.TemporaryDirectory(prefix="vivavoce-pytest-") as temp_dir:
-        root = Path(temp_dir)
-        student_file = root / "student_solution.py"
-        student_file.write_text(student_code, encoding="utf-8")
+    try:
+        repo_root_path: Optional[Path] = None
+        if repo_root is not None:
+            if not isinstance(repo_root, (str, Path)) or not str(repo_root).strip():
+                return SandboxResult(
+                    passed=False,
+                    stdout="",
+                    stderr="",
+                    runtime_ms=int((time.perf_counter() - started) * 1000),
+                    timed_out=False,
+                    tests_passed=0,
+                    tests_failed=0,
+                    error="repo_root must be a non-empty string or Path",
+                )
+            repo_root_path = Path(repo_root).resolve()
+            if not repo_root_path.exists() or not repo_root_path.is_dir():
+                return SandboxResult(
+                    passed=False,
+                    stdout="",
+                    stderr="",
+                    runtime_ms=int((time.perf_counter() - started) * 1000),
+                    timed_out=False,
+                    tests_passed=0,
+                    tests_failed=0,
+                    error=f"repo_root does not exist or is not a directory: {repo_root}",
+                )
 
-        test_file = root / "test_student_code.py"
-        test_file.write_text(test_code, encoding="utf-8")
+        timeout_s = getattr(
+            sys.modules[__name__], "SANDBOX_TIMEOUT_S", SANDBOX_TIMEOUT_S
+        )
+        output_limit = getattr(
+            sys.modules[__name__], "SANDBOX_OUTPUT_LIMIT", SANDBOX_OUTPUT_LIMIT
+        )
 
-        command = [sys.executable, "-m", "pytest", "-q", "--tb=short"]
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=root,
-                env=_minimal_environment(),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=4,
-                check=False,
+        with tempfile.TemporaryDirectory(
+            prefix="vivavoce-sandbox-", ignore_cleanup_errors=True
+        ) as temp_dir, tempfile.TemporaryDirectory(
+            prefix="vivavoce-sandbox-io-", ignore_cleanup_errors=True
+        ) as io_dir:
+            temp_dir_path = Path(temp_dir).resolve()
+            io_dir_path = Path(io_dir).resolve()
+
+            # 1. If repo_root provided, copy repo .py files first
+            if repo_root_path is not None:
+                _copy_repo_files(repo_root_path, temp_dir_path)
+
+            # 2. Validate and write student code (overwrites existing file or creates new)
+            target_file = _validate_relative_path(file_path, temp_dir_path)
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            target_file.write_text(student_code, encoding="utf-8")
+
+            # Ensure __init__.py exists in any intermediate directories for packages
+            curr = target_file.parent
+            while curr != temp_dir_path and temp_dir_path in curr.parents:
+                init_file = curr / "__init__.py"
+                if not init_file.exists():
+                    init_file.write_text("", encoding="utf-8")
+                curr = curr.parent
+
+            # 3. Write test code
+            test_file = temp_dir_path / "test_vivavoce_challenge.py"
+            test_file.write_text(test_code, encoding="utf-8")
+
+            # 4. Write pytest.ini
+            pytest_ini = temp_dir_path / "pytest.ini"
+            pytest_ini.write_text("[pytest]\npythonpath = .\n", encoding="utf-8")
+
+            # 4. Build command and minimal env
+            command = [
+                sys.executable,
+                "-I",
+                "-m",
+                "pytest",
+                "-q",
+                "--tb=short",
+                "-p",
+                "no:cacheprovider",
+                "--noconftest",
+                "test_vivavoce_challenge.py",
+            ]
+            clean_env = _build_minimal_env(temp_dir_path)
+
+            stdout_file = io_dir_path / "stdout.log"
+            stderr_file = io_dir_path / "stderr.log"
+
+            job_handle = None
+            suspended = False
+            if sys.platform == "win32" and kernel32 is not None:
+                try:
+                    job = kernel32.CreateJobObjectW(None, None)
+                    if job:
+                        info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+                        info.BasicLimitInformation.LimitFlags = (
+                            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                            | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                            | JOB_OBJECT_LIMIT_JOB_MEMORY
+                        )
+                        info.BasicLimitInformation.ActiveProcessLimit = 32
+                        info.JobMemoryLimit = 1024 * 1024 * 1024  # 1 GB for the whole run
+                        success = kernel32.SetInformationJobObject(
+                            job,
+                            JobObjectExtendedLimitInformation,
+                            ctypes.byref(info),
+                            ctypes.sizeof(info),
+                        )
+                        if success:
+                            job_handle = job
+                        else:
+                            log.warning(
+                                "SetInformationJobObject failed: %s",
+                                ctypes.get_last_error(),
+                            )
+                            kernel32.CloseHandle(job)
+                except Exception as exc:
+                    log.warning("CreateJobObjectW failed: %s", exc)
+
+            creationflags = 0
+            if sys.platform == "win32" and job_handle:
+                creationflags |= CREATE_SUSPENDED
+                suspended = True
+
+            proc: Optional[subprocess.Popen] = None
+            timed_out = False
+
+            with open(stdout_file, "wb") as f_out, open(stderr_file, "wb") as f_err:
+                try:
+                    proc = subprocess.Popen(
+                        command,
+                        cwd=temp_dir_path,
+                        env=clean_env,
+                        stdin=subprocess.DEVNULL,
+                        stdout=f_out,
+                        stderr=f_err,
+                        creationflags=creationflags,
+                        # POSIX: own process group, so killpg() never hits the server's group
+                        start_new_session=(sys.platform != "win32"),
+                    )
+
+                    if suspended and proc is not None:
+                        if job_handle:
+                            try:
+                                handle_val = wintypes.HANDLE(int(proc._handle))
+                                assigned = kernel32.AssignProcessToJobObject(
+                                    job_handle, handle_val
+                                )
+                                if not assigned:
+                                    log.warning(
+                                        "AssignProcessToJobObject failed: %s",
+                                        ctypes.get_last_error(),
+                                    )
+                            except Exception as exc:
+                                log.warning("AssignProcessToJobObject error: %s", exc)
+
+                        if ntdll is not None:
+                            try:
+                                ntdll.NtResumeProcess(
+                                    wintypes.HANDLE(int(proc._handle))
+                                )
+                            except Exception as exc:
+                                log.warning("NtResumeProcess error: %s", exc)
+
+                    try:
+                        proc.wait(timeout=timeout_s)
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+                        if proc.pid:
+                            _kill_process_tree(proc.pid)
+
+                finally:
+                    if job_handle:
+                        try:
+                            kernel32.TerminateJobObject(job_handle, 1)
+                        except Exception:
+                            pass
+                        try:
+                            kernel32.CloseHandle(job_handle)
+                        except Exception:
+                            pass
+                        job_handle = None
+
+                    if sys.platform != "win32" and proc is not None and proc.pid:
+                        try:
+                            import signal
+
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except Exception:
+                            pass
+
+                    if proc is not None:
+                        try:
+                            proc.wait(timeout=2)
+                        except Exception:
+                            pass
+
+            runtime_ms = int((time.perf_counter() - started) * 1000)
+
+            raw_stdout = _read_output_tail(stdout_file, output_limit)
+            raw_stderr = _read_output_tail(stderr_file, output_limit)
+
+            if timed_out:
+                return SandboxResult(
+                    passed=False,
+                    stdout=raw_stdout,
+                    stderr=raw_stderr,
+                    runtime_ms=runtime_ms,
+                    timed_out=True,
+                    tests_passed=0,
+                    tests_failed=0,
+                    error=f"Execution timed out after {timeout_s}s",
+                )
+
+            returncode = proc.returncode if proc is not None else 1
+            passed, tests_passed, tests_failed, error = _parse_pytest_output(
+                raw_stdout, raw_stderr, returncode
             )
-            stdout = completed.stdout[-12_000:]
-            stderr = completed.stderr[-12_000:]
-            passed = completed.returncode == 0
-            verdict = "Accepted" if passed else "Wrong Answer"
-        except subprocess.TimeoutExpired as exc:
-            stdout = ""
-            stderr = "Verification exceeded 4-second time limit."
-            passed = False
-            verdict = "Time Limit Exceeded"
-        except OSError as exc:
-            stdout = ""
-            stderr = f"Could not start pytest: {exc}"
-            passed = False
-            verdict = "Runtime Error"
 
-    runtime_ms = int((time.perf_counter() - started) * 1000)
-    return RunCodeResponse(
-        passed=passed,
-        verdict=verdict,
-        stdout=stdout,
-        stderr=stderr,
-        runtime_ms=runtime_ms,
-        test_results=[],
-        total_cases=1 if passed else 0,
-        passed_cases=1 if passed else 0,
+            return SandboxResult(
+                passed=passed,
+                stdout=raw_stdout,
+                stderr=raw_stderr,
+                runtime_ms=runtime_ms,
+                timed_out=False,
+                tests_passed=tests_passed,
+                tests_failed=tests_failed,
+                error=error,
+            )
+
+    except Exception as exc:
+        runtime_ms = int((time.perf_counter() - started) * 1000)
+        return SandboxResult(
+            passed=False,
+            stdout="",
+            stderr="",
+            runtime_ms=runtime_ms,
+            timed_out=False,
+            tests_passed=0,
+            tests_failed=0,
+            error=str(exc),
+        )
+
+
+async def execute_verification_async(
+    file_path: str,
+    student_code: str,
+    test_code: str,
+    repo_root: Optional[str] = None,
+) -> SandboxResult:
+    """Async wrapper around execute_verification via asyncio.to_thread."""
+    return await asyncio.to_thread(
+        execute_verification,
+        file_path,
+        student_code,
+        test_code,
+        repo_root,
     )
+
+
+def warm_up_sandbox() -> int:
+    """Warm up pytest process execution on server startup; returns runtime in ms.
+
+    Runs one trivial pytest run to pre-warm python/pytest startup and caches.
+    Never raises an exception.
+    """
+    try:
+        t0 = time.perf_counter()
+        res = execute_verification(
+            file_path="_warmup_target.py",
+            student_code="def _warmup_check() -> bool:\n    return True\n",
+            test_code="from _warmup_target import _warmup_check\n\ndef test_warmup():\n    assert _warmup_check() is True\n",
+            repo_root=None,
+        )
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        return elapsed_ms if elapsed_ms > 0 else res.runtime_ms
+    except Exception as exc:
+        log.warning("warm_up_sandbox encountered an unexpected error: %s", exc)
+        return 0

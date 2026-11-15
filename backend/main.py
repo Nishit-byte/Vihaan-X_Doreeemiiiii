@@ -14,10 +14,12 @@ Routes Mounted:
 
 from __future__ import annotations
 
+import asyncio  # M2: Async thread offloading
 import base64
 from contextlib import asynccontextmanager
 import inspect
 import io
+import logging  # M2: Exception logging
 import os
 from pathlib import Path
 import struct
@@ -25,6 +27,8 @@ import sys
 import time
 import wave
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger("vivavoce.backend")  # M2: Logger instance
 
 # Ensure project root is in sys.path so 'backend.xxx' imports resolve when run from inside backend/
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
@@ -71,6 +75,14 @@ async def lifespan(app: FastAPI):
         await warm_filler_cache()
     except Exception:
         pass
+    # M2: Warm up sandbox and demo repo in background thread without delaying startup
+    try:
+        from backend.sandbox import warm_up_sandbox
+        from backend.ingestion import materialize_demo_repo
+        asyncio.create_task(asyncio.to_thread(warm_up_sandbox))
+        asyncio.create_task(asyncio.to_thread(materialize_demo_repo))
+    except Exception as exc:
+        logger.warning(f"M2: Background warmup error: {exc}")
     yield
 
 app = FastAPI(
@@ -79,6 +91,10 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# M2: Offline demo replay middleware (inert unless DEMO_RECORD / DEMO_REPLAY set)
+from backend.replay import ReplayMiddleware
+app.add_middleware(ReplayMiddleware)
 
 # Enable wide CORS for Vite React frontend (Port 5173) and local development
 app.add_middleware(
@@ -324,67 +340,60 @@ def _mock_paper_index(filename: str = "sample_paper.pdf") -> PaperIndex:
 # --- Dynamic M2 / M3 Wrappers (Zero-Conflict Plug-and-Play) ---
 
 def _invoke_m2_repo_ingestion(github_url: str, use_demo_cache: bool = False) -> RepoIndex:
-    """Calls M2's `clone_and_index_repo` and `extract_author_map` if present, else falls back to mock."""
-    if not use_demo_cache:
-        try:
-            from backend.ingestion import repo_parser  # type: ignore
-
-            if hasattr(repo_parser, "clone_and_index_repo"):
-                repo_index: RepoIndex = repo_parser.clone_and_index_repo(github_url)
-                # Wire M2's git_blame if not already populated inside clone_and_index_repo
-                if not repo_index.author_map and repo_index.local_path:
-                    try:
-                        from backend.ingestion import git_blame  # type: ignore
-
-                        if hasattr(git_blame, "extract_author_map"):
-                            file_paths = [f.path for f in repo_index.files]
-                            author_map = git_blame.extract_author_map(
-                                repo_index.local_path, file_paths
-                            )
-                            repo_index.author_map = author_map
-                            if not repo_index.authors:
-                                repo_index.authors = list(author_map.keys())
-                    except Exception:
-                        pass
-                return repo_index
-        except Exception:
-            pass
+    """Calls M2's `clone_and_index_repo` and `extract_author_map` via team_adapter, else falls back to mock."""
+    # M2: Ingest repository via team_adapter with full exception logging before mock fallback
+    try:  # M2: bind IngestionError before the call so a broken M2 import still reaches the mock
+        from backend.ingestion.models import IngestionError  # M2:
+    except Exception:  # M2:
+        IngestionError = ValueError  # M2:
+    try:
+        from backend.ingestion import team_adapter  # M2:
+        return team_adapter.ingest_repo(github_url=github_url, use_demo_cache=use_demo_cache)
+    except HTTPException:
+        raise
+    except (ValueError, IngestionError) as exc:  # M2:
+        raise HTTPException(status_code=400, detail=getattr(exc, "user_message", str(exc))) from exc  # M2:
+    except Exception:
+        logger.exception("M2: Failed to ingest repository via team_adapter; falling back to mock")
 
     return _mock_repo_index(github_url)
 
 
 def _invoke_m2_pdf_ingestion(pdf_bytes: bytes, filename: str) -> PaperIndex:
-    """Calls M2's `parse_research_paper(pdf_bytes)` if present, loading demo PDF when `pdf_bytes` is empty."""
+    """Calls M2's `parse_research_paper(pdf_bytes)` via team_adapter, else falls back to mock."""
+    # M2: Ingest PDF via team_adapter with full exception logging before mock fallback
+    try:  # M2: bind IngestionError before the call so a broken M2 import still reaches the mock
+        from backend.ingestion.models import IngestionError  # M2:
+    except Exception:  # M2:
+        IngestionError = ValueError  # M2:
     try:
-        from backend.ingestion import pdf_parser  # type: ignore
-
-        effective_bytes = pdf_bytes
-        if not effective_bytes and hasattr(pdf_parser, "load_demo_paper_bytes"):
-            try:
-                effective_bytes = pdf_parser.load_demo_paper_bytes()
-            except Exception:
-                effective_bytes = b""
-
-        if effective_bytes and hasattr(pdf_parser, "parse_research_paper"):
-            return pdf_parser.parse_research_paper(effective_bytes)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        from backend.ingestion import team_adapter  # M2:
+        return team_adapter.ingest_pdf(pdf_bytes=pdf_bytes)
+    except HTTPException:
+        raise
+    except (ValueError, IngestionError) as exc:  # M2:
+        raise HTTPException(status_code=400, detail=getattr(exc, "user_message", str(exc))) from exc  # M2:
     except Exception:
-        pass
+        logger.exception("M2: Failed to ingest PDF via team_adapter; falling back to mock")
+
     return _mock_paper_index(filename)
 
 
 def _invoke_m2_sandbox(
-    file_path: str, student_code: str, test_code: str
+    file_path: str, student_code: str, test_code: str, repo_root: Optional[str] = None
 ) -> RunCodeResponse:
-    """Calls M2's `execute_verification` in `backend/sandbox/sandbox_runner.py`, with safe subprocess fallback."""
+    """Calls M2's `execute_verification` via team_adapter, with safe subprocess fallback."""
+    # M2: Execute code verification in sandbox via team_adapter with full exception logging
     try:
-        from backend.sandbox import sandbox_runner  # type: ignore
-
-        if hasattr(sandbox_runner, "execute_verification"):
-            return sandbox_runner.execute_verification(file_path, student_code, test_code)
+        from backend.ingestion import team_adapter  # M2:
+        return team_adapter.run_challenge(
+            file_path=file_path,
+            student_code=student_code,
+            test_code=test_code,
+            repo_root=repo_root,
+        )
     except Exception:
-        pass
+        logger.exception("M2: Failed to execute sandbox via team_adapter; falling back to built-in runner")
 
     # Built-in isolated 4s tempfile pytest runner fallback (matches Section 5 spec)
     import subprocess
@@ -604,7 +613,9 @@ async def ingest_repo(req: IngestRepoRequest) -> IngestResponse:
     if not req.github_url or not req.github_url.strip():
         raise HTTPException(status_code=400, detail="github_url is required.")
 
-    repo_index = _invoke_m2_repo_ingestion(
+    # M2: Offload repo ingestion to thread pool so slow clone/AST does not block event loop
+    repo_index = await asyncio.to_thread(
+        _invoke_m2_repo_ingestion,
         github_url=req.github_url.strip(),
         use_demo_cache=req.use_demo_cache,
     )
@@ -669,7 +680,12 @@ async def ingest_pdf(
         if not pdf_bytes:
             raise HTTPException(status_code=400, detail="Uploaded PDF file is empty.")
 
-    paper_index = _invoke_m2_pdf_ingestion(pdf_bytes=pdf_bytes, filename=filename)
+    # M2: Offload PDF ingestion to thread pool so slow PDF parsing does not block event loop
+    paper_index = await asyncio.to_thread(
+        _invoke_m2_pdf_ingestion,
+        pdf_bytes=pdf_bytes,
+        filename=filename,
+    )
 
     # Research Paper Explorer does not use spoken voice synthesis; skip slow TTS here
     initial_turn = start_session(
@@ -970,10 +986,14 @@ async def run_code(req: RunCodeRequest) -> RunCodeResponse:
         if not effective_test_code and session and session.active_challenge:
             effective_test_code = session.active_challenge.test_code
 
-        result = _invoke_m2_sandbox(
+        # M2: Pass session repo path as repo_root to sandbox call, and run in worker thread
+        repo_root = session.repo_index.local_path if (session and session.repo_index) else None
+        result = await asyncio.to_thread(
+            _invoke_m2_sandbox,
             file_path=req.file_path or "main.py",
             student_code=source,
             test_code=effective_test_code or "",
+            repo_root=repo_root,
         )
 
     if session is not None:

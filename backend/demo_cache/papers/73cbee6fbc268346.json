@@ -1,0 +1,167 @@
+{
+  "paper_id": "73cbee6fbc268346",
+  "title": "Adaptive Spaced Repetition with Peer Matching",
+  "page_count": 3,
+  "sections": [
+    {
+      "title": "Abstract",
+      "page_start": 1,
+      "page_end": 1,
+      "text": "Spaced repetition systems traditionally optimize long-term memory retention through solitary flashcard reviews scheduled against calibrated forgetting curves. While highly effective for atomic fact retrieval, isolated practice fails to cultivate dialectical defense, trade-off analysis, or deep conceptual explanation under real-time interrogation. In this paper, we introduce Adaptive Spaced Repetition with Peer Matching (ASR-PM), a collaborative learning framework that pairs learners with complementary mastery profiles for synchronous, concept-grounded viva practice sessions.\n\nOur system constructs a curriculum dependency graph, tracks student memory decay via exponential half-life estimation, and matches learners into reciprocal peer dyads using bipartite complementarity scoring. Over a four-week empirical evaluation with 48 undergraduate computer science students, our approach achieved a 27.4% improvement in analytical explanation scores and a 34.1% reduction in forgetting rate variance compared to standard solitary spaced repetition baselines."
+    },
+    {
+      "title": "1 Introduction",
+      "page_start": 1,
+      "page_end": 1,
+      "text": "Mastery in computer science and software engineering requires far more than passive recall of syntax and definitions. Practicing engineers must articulate complex design trade-offs, identify edge cases, explain failure modes, and defend architectural choices under rigorous peer review and technical scrutiny. Traditional computer-assisted study platforms rely heavily on solitary spaced repetition algorithms, such as SuperMemo SM-2 or half-life regression models. While these algorithms schedule individual retrieval practice effectively, solitary study creates an illusion of competence: learners frequently recognize terms and concepts without possessing the ability to explain underlying mechanisms coherently.\n\nReciprocal peer instruction offers substantial cognitive benefits by compelling learners to formulate explicit verbal explanations, detect misconceptions, and reconcile conflicting perspectives. Nevertheless, coordinating peer study in educational institutions faces persistent obstacles: student schedules conflict, skill disparities often reduce interactions to one-sided tutoring, and unguided discussions frequently drift off-topic.\n\nTo overcome these limitations, we design and implement Adaptive Spaced Repetition with Peer Matching (ASR-PM). ASR-PM coordinates structured, 15-minute peer viva sessions anchored directly in curriculum dependency graphs. By pairing students based on asymmetric concept mastery, the system guarantees reciprocal dialogue where participants alternate between the roles of examiner and candidate, ensuring balanced collaborative reinforcement across the entire curriculum."
+    },
+    {
+      "title": "2 Method",
+      "page_start": 1,
+      "page_end": 1,
+      "text": "The ASR-PM architecture consists of six continuous functional stages designed to transform curriculum ontologies and student interaction telemetry into structured peer viva examinations. The pipeline integrates offline dependency indexing with online matching and bayesian performance updating."
+    },
+    {
+      "title": "2.1 Concept Knowledge Graph Construction",
+      "page_start": 1,
+      "page_end": 2,
+      "text": "We construct a directed concept knowledge graph from the curriculum ontology where vertices represent granular technical concepts and directed edges denote prerequisite dependencies. Topological ordering over this graph ensures that foundational competencies are scheduled before advanced downstream topics. Each node stores pedagogical metadata including reference code snippets, common antipatterns, and calibrated difficulty ratings.\n\nThe graph structure enforces strict transitive prerequisite validation before any node is marked eligible for peer\n\nexamination. When a syllabus module is updated, an automated AST parser scans repository milestones and problem sets to extract symbol dependencies, updating topological weights and prerequisite chains across the graph."
+    },
+    {
+      "title": "2.2 Dynamic Memory Decay Modeling",
+      "page_start": 2,
+      "page_end": 2,
+      "text": "Student retention probability for each concept node is modeled using a modified half-life exponential decay function calibrated by historical retrieval latency. The decay parameter dynamically updates after each review session to reflect individual consolidation rates. Let R_i(t) denote the recall probability of concept i at elapsed time t since the last review.\n\nWhen R_i(t) approaches the critical retrieval threshold of 0.65, the concept enters the student active review candidate queue. Unlike univariate spaced repetition models, our decay formulation incorporates cross-concept interference penalties derived from topological graph proximity, ensuring that related concepts with competing memory representations receive accelerated review scheduling."
+    },
+    {
+      "title": "2.3 Peer Complementarity Scoring",
+      "page_start": 2,
+      "page_end": 2,
+      "text": "A multi-factor affinity metric computes bipartite complementarity between student pairs based on orthogonal mastery profiles. Pairs with asymmetric knowledge distributions yield significantly higher collaborative reinforcement than homogeneous groupings. Specifically, given student A with high mastery in concept X and emerging mastery in concept Y, the matching engine searches for peer B exhibiting inverted mastery coordinates.\n\nAn alignment weight penalizes scheduling latency while rewarding cognitive tension, guaranteeing balanced reciprocal dialogue rather than unilateral tutoring. Complementarity scores are normalized between zero and one, incorporating historical rating variance and peer feedback reliability factors to prevent persistent mismatching."
+    },
+    {
+      "title": "2.4 Synchronous Pairing and Session Scheduling",
+      "page_start": 2,
+      "page_end": 2,
+      "text": "The matching engine solves a constrained maximum-weight bipartite matching problem to allocate learners into synchronous 15-minute viva practice rooms. A greedy priority queue handles real-time arrivals while enforcing constraints on mutual availability. When matching candidates arrive asynchronously within a 5-minute scheduling window, Edmonds blossom algorithm computes optimal pairings that maximize global cohort complementarity.\n\nSessions are bounded by strict countdown timers to maintain high cognitive cadence and prevent fatigue. The scheduling subsystem dynamically dispatches web socket notification payloads to both participants upon room allocation, providing seamless transition from queue to active dialogue."
+    },
+    {
+      "title": "2.5 Collaborative Question Generation",
+      "page_start": 2,
+      "page_end": 2,
+      "text": "An LLM-driven scaffold synthesizes personalized technical prompts targeted at the intersection of one peer strength and the other retention deficit. Prompts enforce reciprocal interrogation where each partner alternates between examiner and candidate roles. For each concept turn, the system displays code highlights or architecture diagrams to the designated student while providing the peer examiner with rubric checkpoints and probing follow-up questions.\n\nThis structured scaffolding prevents topic drift and anchors discourse in concrete technical artifacts. Probing prompts are stratified across Bloom taxonomy levels, escalating from fundamental comprehension checks to complex mutation and trade-off challenges."
+    },
+    {
+      "title": "2.6 Dual-Feedback Performance Update",
+      "page_start": 2,
+      "page_end": 2,
+      "text": "Following the session, both explicit rubric ratings and implicit response latency signals update the bayesian mastery estimators for both participants. Posterior mastery values are propagated backward through the concept graph to adjust subsequent spacing intervals. If a candidate demonstrates robust analytical depth on an edge-case challenge, the half-life parameter of all prerequisite concept nodes is extended.\n\nConversely, failure on foundational concepts triggers immediate remedial re-queuing within 48 hours. Both qualitative verbal notes and quantitative rubric ticks are logged into persistent student profiles, establishing longitudinal calibration curves across multi-week instructional units."
+    },
+    {
+      "title": "3 Evaluation",
+      "page_start": 3,
+      "page_end": 3,
+      "text": "We conducted a four-week controlled trial comparing ASR-PM against solitary flashcard spaced repetition (Baseline A) and unstructured peer discussion (Baseline B). A cohort of 48 undergraduate computer science students was partitioned into three counterbalanced groups of 16 participants each. All participants completed identical pre-test and post-test assessments covering distributed consensus, synchronization primitives, and concurrent data structures.\n\nOur evaluation measured conceptual explanation depth graded on Bloom taxonomy (L1 Recall to L4 Evaluation), four-week retention stability, and session completion rates. Students in the ASR-PM condition achieved a mean Bloom depth score of 3.42 out of 4.0, representing a 27.4% improvement over solitary spaced repetition (2.68) and a 19.8% improvement over unstructured peer discussion (2.85).\n\nFurthermore, retention decay variance across the cohort decreased by 34.1%, confirming that reciprocal peer interrogation mitigates individual forgetting curves. Voluntary session completion was 91.2% in the ASR-PM group compared to 64.5% in the unstructured discussion baseline, demonstrating superior student engagement."
+    },
+    {
+      "title": "4 Limitations",
+      "page_start": 3,
+      "page_end": 3,
+      "text": "Several practical limitations of our framework warrant consideration. First, the peer matching algorithm requires a minimum concurrent user pool density to discover complementary dyads within acceptable wait times (< 3 minutes); in low-density settings, matching quality degrades toward random pairing.\n\nSecond, the automated question generator relies on well-structured syllabus ontologies, requiring initial curriculum engineering effort. Finally, our current trial evaluated synchronous interactions in controlled lab settings; noisy network environments or asynchronous modalities may introduce coordination overhead that dampens collaborative efficacy."
+    },
+    {
+      "title": "References",
+      "page_start": 3,
+      "page_end": 3,
+      "text": "[1] Ebbinghaus, H. Memory: A Contribution to Experimental Psychology. Teachers College, Columbia University, 1913. [2] Mazur, E. Peer Instruction: A User Manual. Prentice Hall, Upper Saddle River, NJ, 1997. [3] Settles, B., & Meeder, B. A trainable spaced repetition model for language learning. In Proceedings of the 54th Annual Meeting of the ACL, pp. 1848-1858, 2016. [4] Chi, M. T., & Wylie, R. The ICAP framework: Linking cognitive engagement to active learning outcomes. Educational Psychologist, 49(4), 219-243, 2014. [5] Koenecke, A., et al. Racial disparities in automated speech recognition. Proceedings of the National Academy of Sciences (PNAS), 117(14), 7684-7689, 2020. [6] Bloom, B. S. Taxonomy of Educational Objectives: The Classification of Educational Goals. Longmans, Green, 1956."
+    }
+  ],
+  "full_text": "Adaptive Spaced Repetition with Peer Matching\n\nAman Verma, Priya Nair, Rohan Gupta\n\nDepartment of Computer Science, National Institute of Technology\n\nAbstract\n\nSpaced repetition systems traditionally optimize long-term memory retention through solitary flashcard reviews scheduled against calibrated forgetting curves. While highly effective for atomic fact retrieval, isolated practice fails to cultivate dialectical defense, trade-off analysis, or deep conceptual explanation under real-time interrogation. In this paper, we introduce Adaptive Spaced Repetition with Peer Matching (ASR-PM), a collaborative learning framework that pairs learners with complementary mastery profiles for synchronous, concept-grounded viva practice sessions.\n\nOur system constructs a curriculum dependency graph, tracks student memory decay via exponential half-life estimation, and matches learners into reciprocal peer dyads using bipartite complementarity scoring. Over a four-week empirical evaluation with 48 undergraduate computer science students, our approach achieved a 27.4% improvement in analytical explanation scores and a 34.1% reduction in forgetting rate variance compared to standard solitary spaced repetition baselines.\n\n1 Introduction\n\nMastery in computer science and software engineering requires far more than passive recall of syntax and definitions. Practicing engineers must articulate complex design trade-offs, identify edge cases, explain failure modes, and defend architectural choices under rigorous peer review and technical scrutiny. Traditional computer-assisted study platforms rely heavily on solitary spaced repetition algorithms, such as SuperMemo SM-2 or half-life regression models. While these algorithms schedule individual retrieval practice effectively, solitary study creates an illusion of competence: learners frequently recognize terms and concepts without possessing the ability to explain underlying mechanisms coherently.\n\nReciprocal peer instruction offers substantial cognitive benefits by compelling learners to formulate explicit verbal explanations, detect misconceptions, and reconcile conflicting perspectives. Nevertheless, coordinating peer study in educational institutions faces persistent obstacles: student schedules conflict, skill disparities often reduce interactions to one-sided tutoring, and unguided discussions frequently drift off-topic.\n\nTo overcome these limitations, we design and implement Adaptive Spaced Repetition with Peer Matching (ASR-PM). ASR-PM coordinates structured, 15-minute peer viva sessions anchored directly in curriculum dependency graphs. By pairing students based on asymmetric concept mastery, the system guarantees reciprocal dialogue where participants alternate between the roles of examiner and candidate, ensuring balanced collaborative reinforcement across the entire curriculum.\n\n2 Method\n\nThe ASR-PM architecture consists of six continuous functional stages designed to transform curriculum ontologies and student interaction telemetry into structured peer viva examinations. The pipeline integrates offline dependency indexing with online matching and bayesian performance updating.\n\n2.1 Concept Knowledge Graph Construction\n\nWe construct a directed concept knowledge graph from the curriculum ontology where vertices represent granular technical concepts and directed edges denote prerequisite dependencies. Topological ordering over this graph ensures that foundational competencies are scheduled before advanced downstream topics. Each node stores pedagogical metadata including reference code snippets, common antipatterns, and calibrated difficulty ratings.\n\nThe graph structure enforces strict transitive prerequisite validation before any node is marked eligible for peer\n\nexamination. When a syllabus module is updated, an automated AST parser scans repository milestones and problem sets to extract symbol dependencies, updating topological weights and prerequisite chains across the graph.\n\n2.2 Dynamic Memory Decay Modeling\n\nStudent retention probability for each concept node is modeled using a modified half-life exponential decay function calibrated by historical retrieval latency. The decay parameter dynamically updates after each review session to reflect individual consolidation rates. Let R_i(t) denote the recall probability of concept i at elapsed time t since the last review.\n\nWhen R_i(t) approaches the critical retrieval threshold of 0.65, the concept enters the student active review candidate queue. Unlike univariate spaced repetition models, our decay formulation incorporates cross-concept interference penalties derived from topological graph proximity, ensuring that related concepts with competing memory representations receive accelerated review scheduling.\n\n2.3 Peer Complementarity Scoring\n\nA multi-factor affinity metric computes bipartite complementarity between student pairs based on orthogonal mastery profiles. Pairs with asymmetric knowledge distributions yield significantly higher collaborative reinforcement than homogeneous groupings. Specifically, given student A with high mastery in concept X and emerging mastery in concept Y, the matching engine searches for peer B exhibiting inverted mastery coordinates.\n\nAn alignment weight penalizes scheduling latency while rewarding cognitive tension, guaranteeing balanced reciprocal dialogue rather than unilateral tutoring. Complementarity scores are normalized between zero and one, incorporating historical rating variance and peer feedback reliability factors to prevent persistent mismatching.\n\n2.4 Synchronous Pairing and Session Scheduling\n\nThe matching engine solves a constrained maximum-weight bipartite matching problem to allocate learners into synchronous 15-minute viva practice rooms. A greedy priority queue handles real-time arrivals while enforcing constraints on mutual availability. When matching candidates arrive asynchronously within a 5-minute scheduling window, Edmonds blossom algorithm computes optimal pairings that maximize global cohort complementarity.\n\nSessions are bounded by strict countdown timers to maintain high cognitive cadence and prevent fatigue. The scheduling subsystem dynamically dispatches web socket notification payloads to both participants upon room allocation, providing seamless transition from queue to active dialogue.\n\n2.5 Collaborative Question Generation\n\nAn LLM-driven scaffold synthesizes personalized technical prompts targeted at the intersection of one peer strength and the other retention deficit. Prompts enforce reciprocal interrogation where each partner alternates between examiner and candidate roles. For each concept turn, the system displays code highlights or architecture diagrams to the designated student while providing the peer examiner with rubric checkpoints and probing follow-up questions.\n\nThis structured scaffolding prevents topic drift and anchors discourse in concrete technical artifacts. Probing prompts are stratified across Bloom taxonomy levels, escalating from fundamental comprehension checks to complex mutation and trade-off challenges.\n\n2.6 Dual-Feedback Performance Update\n\nFollowing the session, both explicit rubric ratings and implicit response latency signals update the bayesian mastery estimators for both participants. Posterior mastery values are propagated backward through the concept graph to adjust subsequent spacing intervals. If a candidate demonstrates robust analytical depth on an edge-case challenge, the half-life parameter of all prerequisite concept nodes is extended.\n\nConversely, failure on foundational concepts triggers immediate remedial re-queuing within 48 hours. Both qualitative verbal notes and quantitative rubric ticks are logged into persistent student profiles, establishing longitudinal calibration curves across multi-week instructional units.\n\n3 Evaluation\n\nWe conducted a four-week controlled trial comparing ASR-PM against solitary flashcard spaced repetition (Baseline A) and unstructured peer discussion (Baseline B). A cohort of 48 undergraduate computer science students was partitioned into three counterbalanced groups of 16 participants each. All participants completed identical pre-test and post-test assessments covering distributed consensus, synchronization primitives, and concurrent data structures.\n\nOur evaluation measured conceptual explanation depth graded on Bloom taxonomy (L1 Recall to L4 Evaluation), four-week retention stability, and session completion rates. Students in the ASR-PM condition achieved a mean Bloom depth score of 3.42 out of 4.0, representing a 27.4% improvement over solitary spaced repetition (2.68) and a 19.8% improvement over unstructured peer discussion (2.85).\n\nFurthermore, retention decay variance across the cohort decreased by 34.1%, confirming that reciprocal peer interrogation mitigates individual forgetting curves. Voluntary session completion was 91.2% in the ASR-PM group compared to 64.5% in the unstructured discussion baseline, demonstrating superior student engagement.\n\n4 Limitations\n\nSeveral practical limitations of our framework warrant consideration. First, the peer matching algorithm requires a minimum concurrent user pool density to discover complementary dyads within acceptable wait times (< 3 minutes); in low-density settings, matching quality degrades toward random pairing.\n\nSecond, the automated question generator relies on well-structured syllabus ontologies, requiring initial curriculum engineering effort. Finally, our current trial evaluated synchronous interactions in controlled lab settings; noisy network environments or asynchronous modalities may introduce coordination overhead that dampens collaborative efficacy.\n\nReferences\n\n[1] Ebbinghaus, H. Memory: A Contribution to Experimental Psychology. Teachers College, Columbia University, 1913. [2] Mazur, E. Peer Instruction: A User Manual. Prentice Hall, Upper Saddle River, NJ, 1997. [3] Settles, B., & Meeder, B. A trainable spaced repetition model for language learning. In Proceedings of the 54th Annual Meeting of the ACL, pp. 1848-1858, 2016. [4] Chi, M. T., & Wylie, R. The ICAP framework: Linking cognitive engagement to active learning outcomes. Educational Psychologist, 49(4), 219-243, 2014. [5] Koenecke, A., et al. Racial disparities in automated speech recognition. Proceedings of the National Academy of Sciences (PNAS), 117(14), 7684-7689, 2020. [6] Bloom, B. S. Taxonomy of Educational Objectives: The Classification of Educational Goals. Longmans, Green, 1956.",
+  "nodes": [
+    {
+      "id": "N1",
+      "label": "Concept Knowledge Graph Construction",
+      "excerpt": "We construct a directed concept knowledge graph from the curriculum ontology where vertices represent granular technical concepts and directed edges denote prerequisite dependencies. Topological ordering over this graph ensures that foundational competencies are scheduled before advanced downstream topics.",
+      "section": "2.1 Concept Knowledge Graph Construction",
+      "page": 1,
+      "excerpt_verified": true
+    },
+    {
+      "id": "N2",
+      "label": "Dynamic Memory Decay Modeling",
+      "excerpt": "Student retention probability for each concept node is modeled using a modified half-life exponential decay function calibrated by historical retrieval latency. The decay parameter dynamically updates after each review session to reflect individual consolidation rates.",
+      "section": "2.2 Dynamic Memory Decay Modeling",
+      "page": 2,
+      "excerpt_verified": true
+    },
+    {
+      "id": "N3",
+      "label": "Peer Complementarity Scoring",
+      "excerpt": "A multi-factor affinity metric computes bipartite complementarity between student pairs based on orthogonal mastery profiles. Pairs with asymmetric knowledge distributions yield significantly higher collaborative reinforcement than homogeneous groupings.",
+      "section": "2.3 Peer Complementarity Scoring",
+      "page": 2,
+      "excerpt_verified": true
+    },
+    {
+      "id": "N4",
+      "label": "Synchronous Pairing and Session",
+      "excerpt": "The matching engine solves a constrained maximum-weight bipartite matching problem to allocate learners into synchronous 15-minute viva practice rooms. A greedy priority queue handles real-time arrivals while enforcing constraints on mutual availability.",
+      "section": "2.4 Synchronous Pairing and Session Scheduling",
+      "page": 2,
+      "excerpt_verified": true
+    },
+    {
+      "id": "N5",
+      "label": "Collaborative Question Generation",
+      "excerpt": "An LLM-driven scaffold synthesizes personalized technical prompts targeted at the intersection of one peer strength and the other retention deficit. Prompts enforce reciprocal interrogation where each partner alternates between examiner and candidate roles.",
+      "section": "2.5 Collaborative Question Generation",
+      "page": 2,
+      "excerpt_verified": true
+    },
+    {
+      "id": "N6",
+      "label": "Dual-Feedback Performance Update",
+      "excerpt": "Following the session, both explicit rubric ratings and implicit response latency signals update the bayesian mastery estimators for both participants. Posterior mastery values are propagated backward through the concept graph to adjust subsequent spacing intervals.",
+      "section": "2.6 Dual-Feedback Performance Update",
+      "page": 2,
+      "excerpt_verified": true
+    }
+  ],
+  "edges": [
+    {
+      "source": "N1",
+      "target": "N2",
+      "label": null
+    },
+    {
+      "source": "N2",
+      "target": "N3",
+      "label": null
+    },
+    {
+      "source": "N3",
+      "target": "N4",
+      "label": null
+    },
+    {
+      "source": "N4",
+      "target": "N5",
+      "label": null
+    },
+    {
+      "source": "N5",
+      "target": "N6",
+      "label": null
+    }
+  ],
+  "mermaid": "flowchart TD\n    N1[\"Concept Knowledge Graph Construction\"]\n    N2[\"Dynamic Memory Decay Modeling\"]\n    N3[\"Peer Complementarity Scoring\"]\n    N4[\"Synchronous Pairing and Session\"]\n    N5[\"Collaborative Question Generation\"]\n    N6[\"Dual-Feedback Performance Update\"]\n    N1 --> N2\n    N2 --> N3\n    N3 --> N4\n    N4 --> N5\n    N5 --> N6\n    classDef active stroke-width:4px;",
+  "excerpts": {
+    "N1": "We construct a directed concept knowledge graph from the curriculum ontology where vertices represent granular technical concepts and directed edges denote prerequisite dependencies. Topological ordering over this graph ensures that foundational competencies are scheduled before advanced downstream topics.",
+    "N2": "Student retention probability for each concept node is modeled using a modified half-life exponential decay function calibrated by historical retrieval latency. The decay parameter dynamically updates after each review session to reflect individual consolidation rates.",
+    "N3": "A multi-factor affinity metric computes bipartite complementarity between student pairs based on orthogonal mastery profiles. Pairs with asymmetric knowledge distributions yield significantly higher collaborative reinforcement than homogeneous groupings.",
+    "N4": "The matching engine solves a constrained maximum-weight bipartite matching problem to allocate learners into synchronous 15-minute viva practice rooms. A greedy priority queue handles real-time arrivals while enforcing constraints on mutual availability.",
+    "N5": "An LLM-driven scaffold synthesizes personalized technical prompts targeted at the intersection of one peer strength and the other retention deficit. Prompts enforce reciprocal interrogation where each partner alternates between examiner and candidate roles.",
+    "N6": "Following the session, both explicit rubric ratings and implicit response latency signals update the bayesian mastery estimators for both participants. Posterior mastery values are propagated backward through the concept graph to adjust subsequent spacing intervals."
+  },
+  "source": "heuristic"
+}

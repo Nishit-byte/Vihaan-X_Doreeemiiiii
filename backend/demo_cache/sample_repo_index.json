@@ -1,34 +1,457 @@
 {
-  "repository_url": "demo://vivavoce/sample_repo",
-  "repo_path": "",
+  "repo_id": "1389578e4524",
+  "source_url": "https://github.com/shreyas-269/vivavoce-demo-repo",
+  "local_path": "",
+  "commit_sha": "4e621b9e4c5603bd02d168e3df18a663bac8c8cc",
   "files": [
-    "loader.py",
-    "analysis.py",
-    "config.py"
+    {
+      "path": "models.py",
+      "line_count": 57,
+      "import_count": 3,
+      "imports": [
+        "dataclasses"
+      ],
+      "functions": [
+        {
+          "name": "has_common_interest",
+          "qualname": "Student.has_common_interest",
+          "kind": "method",
+          "args": [
+            "self",
+            "other"
+          ],
+          "docstring": "Check if this student shares any interest with another student.",
+          "line_start": 17,
+          "line_end": 19,
+          "calls": [
+            "bool",
+            "set"
+          ]
+        },
+        {
+          "name": "profile_summary",
+          "qualname": "Student.profile_summary",
+          "kind": "method",
+          "args": [
+            "self"
+          ],
+          "docstring": "Return human-readable summary of student profile.",
+          "line_start": 21,
+          "line_end": 28,
+          "calls": [
+            "join"
+          ]
+        },
+        {
+          "name": "create_student",
+          "qualname": "create_student",
+          "kind": "function",
+          "args": [
+            "student_id",
+            "name",
+            "skills",
+            "interests",
+            "skill_vector",
+            "target_hours"
+          ],
+          "docstring": "Factory function to instantiate a validated Student object.",
+          "line_start": 31,
+          "line_end": 47,
+          "calls": [
+            "Student",
+            "list"
+          ]
+        },
+        {
+          "name": "is_suitable_partner",
+          "qualname": "is_suitable_partner",
+          "kind": "function",
+          "args": [
+            "student",
+            "candidate",
+            "min_common_skills"
+          ],
+          "docstring": "Determine if candidate meets baseline skill and interest compatibility.",
+          "line_start": 50,
+          "line_end": 57,
+          "calls": [
+            "set",
+            "len"
+          ]
+        }
+      ],
+      "classes": [
+        "Student"
+      ],
+      "constants": [],
+      "content": "\"\"\"Student and study group domain models for studysync.\"\"\"\n\nfrom dataclasses import dataclass, field\n\n\n@dataclass\nclass Student:\n    \"\"\"Student profile representation for peer matching.\"\"\"\n\n    student_id: int\n    name: str\n    skills: list[str] = field(default_factory=list)\n    interests: list[str] = field(default_factory=list)\n    skill_vector: list[float] = field(default_factory=list)\n    target_hours: float = 10.0\n\n    def has_common_interest(self, other: \"Student\") -> bool:\n        \"\"\"Check if this student shares any interest with another student.\"\"\"\n        return bool(set(self.interests) & set(other.interests))\n\n    def profile_summary(self) -> str:\n        \"\"\"Return human-readable summary of student profile.\"\"\"\n        skill_str = \", \".join(self.skills) or \"none\"\n        interest_str = \", \".join(self.interests) or \"general\"\n        return (\n            f\"{self.name} (ID: {self.student_id}) | \"\n            f\"Skills: [{skill_str}] | Interests: [{interest_str}]\"\n        )\n\n\ndef create_student(\n    student_id: int,\n    name: str,\n    skills: list[str],\n    interests: list[str],\n    skill_vector: list[float],\n    target_hours: float = 10.0,\n) -> Student:\n    \"\"\"Factory function to instantiate a validated Student object.\"\"\"\n    return Student(\n        student_id=student_id,\n        name=name,\n        skills=list(skills),\n        interests=list(interests),\n        skill_vector=list(skill_vector),\n        target_hours=target_hours,\n    )\n\n\ndef is_suitable_partner(\n    student: Student, candidate: Student, min_common_skills: int = 1\n) -> bool:\n    \"\"\"Determine if candidate meets baseline skill and interest compatibility.\"\"\"\n    if student.student_id == candidate.student_id:\n        return False\n    common = set(student.skills) & set(candidate.skills)\n    return len(common) >= min_common_skills\n"
+    },
+    {
+      "path": "ranking.py",
+      "line_count": 85,
+      "import_count": 1,
+      "imports": [
+        "models",
+        "similarity"
+      ],
+      "functions": [
+        {
+          "name": "score_student_pair",
+          "qualname": "score_student_pair",
+          "kind": "function",
+          "args": [
+            "student",
+            "candidate",
+            "skill_weight"
+          ],
+          "docstring": "Compute overall compatibility score between two students.",
+          "line_start": 7,
+          "line_end": 17,
+          "calls": [
+            "composite_similarity"
+          ]
+        },
+        {
+          "name": "top_k_partners",
+          "qualname": "top_k_partners",
+          "kind": "function",
+          "args": [
+            "target",
+            "candidates",
+            "k",
+            "min_score"
+          ],
+          "docstring": "Return top-k highest scoring study partner candidates for a student.",
+          "line_start": 20,
+          "line_end": 36,
+          "calls": [
+            "score_student_pair",
+            "scored.append",
+            "scored.sort"
+          ]
+        },
+        {
+          "name": "filter_by_min_score",
+          "qualname": "filter_by_min_score",
+          "kind": "function",
+          "args": [
+            "scored_pairs",
+            "threshold"
+          ],
+          "docstring": "Filter candidate matches by minimum threshold score.",
+          "line_start": 39,
+          "line_end": 43,
+          "calls": []
+        },
+        {
+          "name": "explain_match_score",
+          "qualname": "explain_match_score",
+          "kind": "function",
+          "args": [
+            "student",
+            "candidate"
+          ],
+          "docstring": "Return concise description of matching factors for pairs.",
+          "line_start": 46,
+          "line_end": 50,
+          "calls": []
+        },
+        {
+          "name": "find_mutual_partners",
+          "qualname": "find_mutual_partners",
+          "kind": "function",
+          "args": [
+            "students",
+            "k"
+          ],
+          "docstring": "Find mutual top-k partner matches across an entire student cohort.",
+          "line_start": 53,
+          "line_end": 69,
+          "calls": [
+            "top_k_partners",
+            "recommendations.items",
+            "recommendations.get",
+            "append"
+          ]
+        },
+        {
+          "name": "reciprocal_match_score",
+          "qualname": "reciprocal_match_score",
+          "kind": "function",
+          "args": [
+            "rankings_a",
+            "sid_b",
+            "rankings_b",
+            "sid_a"
+          ],
+          "docstring": "Calculate reciprocal ranking score between two students.",
+          "line_start": 72,
+          "line_end": 78,
+          "calls": [
+            "rankings_a.index",
+            "rankings_b.index"
+          ]
+        },
+        {
+          "name": "harmonic_rank_score",
+          "qualname": "harmonic_rank_score",
+          "kind": "function",
+          "args": [
+            "rank_a",
+            "rank_b"
+          ],
+          "docstring": "Compute harmonic mean of bilateral partner ranks.",
+          "line_start": 81,
+          "line_end": 85,
+          "calls": []
+        }
+      ],
+      "classes": [],
+      "constants": [],
+      "content": "\"\"\"Candidate ranking and matching algorithms for study partners.\"\"\"\n\nfrom models import Student\nfrom similarity import composite_similarity\n\n\ndef score_student_pair(\n    student: Student, candidate: Student, skill_weight: float = 0.7\n) -> float:\n    \"\"\"Compute overall compatibility score between two students.\"\"\"\n    return composite_similarity(\n        student.skill_vector,\n        candidate.skill_vector,\n        student.interests,\n        candidate.interests,\n        skill_weight=skill_weight,\n    )\n\n\ndef top_k_partners(\n    target: Student,\n    candidates: list[Student],\n    k: int = 3,\n    min_score: float = 0.0,\n) -> list[tuple[Student, float]]:\n    \"\"\"Return top-k highest scoring study partner candidates for a student.\"\"\"\n    scored: list[tuple[Student, float]] = []\n    for cand in candidates:\n        if cand.student_id == target.student_id:\n            continue\n        score = score_student_pair(target, cand)\n        if score >= min_score:\n            scored.append((cand, score))\n\n    scored.sort(key=lambda pair: pair[1], reverse=True)\n    return scored[:k]\n\n\ndef filter_by_min_score(\n    scored_pairs: list[tuple[Student, float]], threshold: float = 0.5\n) -> list[tuple[Student, float]]:\n    \"\"\"Filter candidate matches by minimum threshold score.\"\"\"\n    return [pair for pair in scored_pairs if pair[1] >= threshold]\n\n\ndef explain_match_score(\n    student: Student, candidate: Student\n) -> str:\n    \"\"\"Return concise description of matching factors for pairs.\"\"\"\n    return f\"Match between {student.name} and {candidate.name}\"\n\n\ndef find_mutual_partners(\n    students: list[Student], k: int = 2\n) -> dict[int, list[int]]:\n    \"\"\"Find mutual top-k partner matches across an entire student cohort.\"\"\"\n    recommendations: dict[int, list[int]] = {}\n    for st in students:\n        ranked = top_k_partners(st, students, k=k)\n        recommendations[st.student_id] = [c.student_id for c, _ in ranked]\n\n    mutual_matches: dict[int, list[int]] = {st.student_id: [] for st in students}\n    for sid, recs in recommendations.items():\n        for other_id in recs:\n            if sid in recommendations.get(other_id, []):\n                if other_id not in mutual_matches[sid]:\n                    mutual_matches[sid].append(other_id)\n\n    return mutual_matches\n\n\ndef reciprocal_match_score(\n    rankings_a: list[int], sid_b: int, rankings_b: list[int], sid_a: int\n) -> float:\n    \"\"\"Calculate reciprocal ranking score between two students.\"\"\"\n    r_a = rankings_a.index(sid_b) + 1 if sid_b in rankings_a else 100\n    r_b = rankings_b.index(sid_a) + 1 if sid_a in rankings_b else 100\n    return 1.0 / (r_a + r_b)\n\n\ndef harmonic_rank_score(rank_a: int, rank_b: int) -> float:\n    \"\"\"Compute harmonic mean of bilateral partner ranks.\"\"\"\n    if rank_a <= 0 or rank_b <= 0:\n        return 0.0\n    return 2.0 / ((1.0 / rank_a) + (1.0 / rank_b))\n"
+    },
+    {
+      "path": "utils/vector_ops.py",
+      "line_count": 23,
+      "import_count": 2,
+      "imports": [
+        "math"
+      ],
+      "functions": [
+        {
+          "name": "dot_product",
+          "qualname": "dot_product",
+          "kind": "function",
+          "args": [
+            "vec_a",
+            "vec_b"
+          ],
+          "docstring": "Compute dot product of two numeric vectors of identical length.",
+          "line_start": 6,
+          "line_end": 10,
+          "calls": [
+            "len",
+            "ValueError",
+            "sum",
+            "zip"
+          ]
+        },
+        {
+          "name": "vector_norm",
+          "qualname": "vector_norm",
+          "kind": "function",
+          "args": [
+            "vec"
+          ],
+          "docstring": "Compute Euclidean L2 norm of a vector.",
+          "line_start": 13,
+          "line_end": 15,
+          "calls": [
+            "math.sqrt",
+            "sum"
+          ]
+        },
+        {
+          "name": "normalize_vector",
+          "qualname": "normalize_vector",
+          "kind": "function",
+          "args": [
+            "vec"
+          ],
+          "docstring": "Normalize vector to unit length, returning zeroes if norm is 0.",
+          "line_start": 18,
+          "line_end": 23,
+          "calls": [
+            "vector_norm",
+            "len"
+          ]
+        }
+      ],
+      "classes": [],
+      "constants": [],
+      "content": "\"\"\"Vector math utilities for computing distances and norms.\"\"\"\n\nimport math\n\n\ndef dot_product(vec_a: list[float], vec_b: list[float]) -> float:\n    \"\"\"Compute dot product of two numeric vectors of identical length.\"\"\"\n    if len(vec_a) != len(vec_b):\n        raise ValueError(\"Vectors must have the same dimension\")\n    return sum(a * b for a, b in zip(vec_a, vec_b))\n\n\ndef vector_norm(vec: list[float]) -> float:\n    \"\"\"Compute Euclidean L2 norm of a vector.\"\"\"\n    return math.sqrt(sum(x * x for x in vec))\n\n\ndef normalize_vector(vec: list[float]) -> list[float]:\n    \"\"\"Normalize vector to unit length, returning zeroes if norm is 0.\"\"\"\n    norm = vector_norm(vec)\n    if norm == 0.0:\n        return [0.0] * len(vec)\n    return [x / norm for x in vec]\n"
+    },
+    {
+      "path": "similarity.py",
+      "line_count": 43,
+      "import_count": 1,
+      "imports": [
+        "utils.vector_ops"
+      ],
+      "functions": [
+        {
+          "name": "cosine_similarity",
+          "qualname": "cosine_similarity",
+          "kind": "function",
+          "args": [
+            "vec_a",
+            "vec_b"
+          ],
+          "docstring": "Compute cosine similarity between two numeric vectors.\n\nUses dot product and Euclidean norm from utils.vector_ops.\nReturns a score between -1.0 and 1.0.",
+          "line_start": 6,
+          "line_end": 17,
+          "calls": [
+            "len",
+            "ValueError",
+            "dot_product",
+            "vector_norm"
+          ]
+        },
+        {
+          "name": "jaccard_similarity",
+          "qualname": "jaccard_similarity",
+          "kind": "function",
+          "args": [
+            "set_a",
+            "set_b"
+          ],
+          "docstring": "Compute Jaccard similarity coefficient between two sets of items.",
+          "line_start": 20,
+          "line_end": 29,
+          "calls": [
+            "set",
+            "len"
+          ]
+        },
+        {
+          "name": "composite_similarity",
+          "qualname": "composite_similarity",
+          "kind": "function",
+          "args": [
+            "student_a_vec",
+            "student_b_vec",
+            "interests_a",
+            "interests_b",
+            "skill_weight"
+          ],
+          "docstring": "Calculate weighted composite similarity across skills and interests.",
+          "line_start": 32,
+          "line_end": 43,
+          "calls": [
+            "cosine_similarity",
+            "jaccard_similarity"
+          ]
+        }
+      ],
+      "classes": [],
+      "constants": [],
+      "content": "\"\"\"Similarity metrics for comparing student skills and shared interests.\"\"\"\n\nfrom utils.vector_ops import dot_product, vector_norm\n\n\ndef cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:\n    \"\"\"Compute cosine similarity between two numeric vectors.\n\n    Uses dot product and Euclidean norm from utils.vector_ops.\n    Returns a score between -1.0 and 1.0.\n    \"\"\"\n    if len(vec_a) != len(vec_b):\n        raise ValueError(\"Vectors must have the same dimension\")\n    dot = dot_product(vec_a, vec_b)\n    norm_a = vector_norm(vec_a)\n    norm_b = vector_norm(vec_b)\n    return dot / (norm_a * norm_b)\n\n\ndef jaccard_similarity(\n    set_a: list[str] | set[str], set_b: list[str] | set[str]\n) -> float:\n    \"\"\"Compute Jaccard similarity coefficient between two sets of items.\"\"\"\n    s_a = set(set_a)\n    s_b = set(set_b)\n    union_len = len(s_a | s_b)\n    if union_len == 0:\n        return 0.0\n    return len(s_a & s_b) / union_len\n\n\ndef composite_similarity(\n    student_a_vec: list[float],\n    student_b_vec: list[float],\n    interests_a: list[str],\n    interests_b: list[str],\n    skill_weight: float = 0.7,\n) -> float:\n    \"\"\"Calculate weighted composite similarity across skills and interests.\"\"\"\n    cos_sim = cosine_similarity(student_a_vec, student_b_vec)\n    jac_sim = jaccard_similarity(interests_a, interests_b)\n    interest_weight = 1.0 - skill_weight\n    return (skill_weight * cos_sim) + (interest_weight * jac_sim)\n"
+    },
+    {
+      "path": "data_loader.py",
+      "line_count": 34,
+      "import_count": 1,
+      "imports": [
+        "models"
+      ],
+      "functions": [
+        {
+          "name": "parse_student_record",
+          "qualname": "parse_student_record",
+          "kind": "function",
+          "args": [
+            "record"
+          ],
+          "docstring": "Parse dictionary record into a validated Student instance.",
+          "line_start": 6,
+          "line_end": 15,
+          "calls": [
+            "create_student",
+            "int",
+            "str",
+            "list",
+            "record.get",
+            "float"
+          ]
+        },
+        {
+          "name": "load_sample_students",
+          "qualname": "load_sample_students",
+          "kind": "function",
+          "args": [],
+          "docstring": "Provide sample cohort of students for testing.",
+          "line_start": 18,
+          "line_end": 34,
+          "calls": [
+            "parse_student_record"
+          ]
+        }
+      ],
+      "classes": [],
+      "constants": [],
+      "content": "\"\"\"Dataset loader utilities for studysync demo.\"\"\"\n\nfrom models import Student, create_student\n\n\ndef parse_student_record(record: dict) -> Student:\n    \"\"\"Parse dictionary record into a validated Student instance.\"\"\"\n    return create_student(\n        student_id=int(record[\"student_id\"]),\n        name=str(record[\"name\"]),\n        skills=list(record.get(\"skills\", [])),\n        interests=list(record.get(\"interests\", [])),\n        skill_vector=[float(x) for x in record.get(\"skill_vector\", [])],\n        target_hours=float(record.get(\"target_hours\", 10.0)),\n    )\n\n\ndef load_sample_students() -> list[Student]:\n    \"\"\"Provide sample cohort of students for testing.\"\"\"\n    c1 = {\n        \"student_id\": 1,\n        \"name\": \"Aarav Sharma\",\n        \"skills\": [\"python\", \"ai\"],\n        \"interests\": [\"robotics\"],\n        \"skill_vector\": [1.0, 0.8, 0.2, 0.0],\n    }\n    c2 = {\n        \"student_id\": 2,\n        \"name\": \"Bhavna Patel\",\n        \"skills\": [\"python\", \"data\"],\n        \"interests\": [\"algorithms\"],\n        \"skill_vector\": [0.9, 0.7, 0.4, 0.1],\n    }\n    return [parse_student_record(c1), parse_student_record(c2)]\n"
+    },
+    {
+      "path": "cli.py",
+      "line_count": 24,
+      "import_count": 0,
+      "imports": [
+        "data_loader",
+        "models",
+        "ranking"
+      ],
+      "functions": [
+        {
+          "name": "format_recommendations",
+          "qualname": "format_recommendations",
+          "kind": "function",
+          "args": [
+            "target",
+            "matches"
+          ],
+          "docstring": "Format matching recommendations into a summary table.",
+          "line_start": 8,
+          "line_end": 15,
+          "calls": [
+            "enumerate",
+            "lines.append",
+            "join"
+          ]
+        },
+        {
+          "name": "main",
+          "qualname": "main",
+          "kind": "function",
+          "args": [],
+          "docstring": "Run CLI demo for default cohort.",
+          "line_start": 18,
+          "line_end": 24,
+          "calls": [
+            "load_sample_students",
+            "top_k_partners",
+            "print",
+            "format_recommendations"
+          ]
+        }
+      ],
+      "classes": [],
+      "constants": [],
+      "content": "\"\"\"Command-line interface demo entrypoint for studysync.\"\"\"\n\nfrom data_loader import load_sample_students\nfrom models import Student\nfrom ranking import top_k_partners\n\n\ndef format_recommendations(\n    target: Student, matches: list[tuple[Student, float]]\n) -> str:\n    \"\"\"Format matching recommendations into a summary table.\"\"\"\n    lines = [f\"Top Study Partners for {target.name}:\"]\n    for rank, (cand, score) in enumerate(matches, start=1):\n        lines.append(f\"  {rank}. {cand.name} (Score: {score:.3f})\")\n    return \"\\n\".join(lines)\n\n\ndef main() -> int:\n    \"\"\"Run CLI demo for default cohort.\"\"\"\n    cohort = load_sample_students()\n    if cohort:\n        recs = top_k_partners(cohort[0], cohort, k=2)\n        print(format_recommendations(cohort[0], recs))\n    return 0\n"
+    },
+    {
+      "path": "utils/__init__.py",
+      "line_count": 5,
+      "import_count": 0,
+      "imports": [
+        "utils.vector_ops"
+      ],
+      "functions": [],
+      "classes": [],
+      "constants": [],
+      "content": "\"\"\"Vector and math operations utility package for studysync.\"\"\"\n\nfrom utils.vector_ops import dot_product, normalize_vector, vector_norm\n\n__all__ = [\"dot_product\", \"vector_norm\", \"normalize_vector\"]\n"
+    }
   ],
-  "file_stats": [
-    {"file_path": "loader.py", "line_count": 13, "import_frequency": 1, "rank_score": 33},
-    {"file_path": "analysis.py", "line_count": 15, "import_frequency": 0, "rank_score": 15},
-    {"file_path": "config.py", "line_count": 9, "import_frequency": 0, "rank_score": 9}
+  "file_tree": [
+    "cli.py",
+    "data_loader.py",
+    "models.py",
+    "ranking.py",
+    "similarity.py",
+    "utils/__init__.py",
+    "utils/vector_ops.py"
   ],
-  "functions": [
-    {"file_path": "loader.py", "name": "load_records", "args": ["path"], "docstring": "Return records from a JSON object containing a records field.", "line_start": 9, "line_end": 13},
-    {"file_path": "analysis.py", "name": "count_records", "args": ["path"], "docstring": "Count rows in a records file.", "line_start": 6, "line_end": 8},
-    {"file_path": "analysis.py", "name": "average_score", "args": ["path"], "docstring": "Return the mean score, or zero when there are no records.", "line_start": 10, "line_end": 15},
-    {"file_path": "config.py", "name": "normalize_name", "args": ["name"], "docstring": "Normalize a display name for stable lookups.", "line_start": 7, "line_end": 9}
-  ],
-  "constants": [
-    {"file_path": "loader.py", "name": "ENCODING", "value": "utf-8", "line_start": 6, "line_end": 6},
-    {"file_path": "config.py", "name": "MAX_RECORDS", "value": 500, "line_start": 3, "line_end": 3},
-    {"file_path": "config.py", "name": "DEFAULT_SCORE", "value": 0.0, "line_start": 4, "line_end": 4}
-  ],
-  "authors": {
-    "Demo Author A": [
-      {"file_path": "loader.py", "line_start": 1, "line_end": 13, "symbol_name": "load_records", "commit_count": 2},
-      {"file_path": "config.py", "line_start": 1, "line_end": 9, "symbol_name": "normalize_name", "commit_count": 1}
-    ],
-    "Demo Author B": [
-      {"file_path": "analysis.py", "line_start": 1, "line_end": 15, "symbol_name": "average_score", "commit_count": 3}
-    ]
-  }
+  "total_py_files": 7,
+  "truncated": false,
+  "from_cache": true,
+  "created_at": "2024-10-01T22:00:00Z"
 }
