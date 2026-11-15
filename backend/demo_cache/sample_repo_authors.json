@@ -1,0 +1,262 @@
+{
+  "author_map": {
+    "Aman Verma": [
+      {
+        "file_path": "models.py",
+        "symbol": null,
+        "line_start": 1,
+        "line_end": 49,
+        "lines_owned": 21,
+        "share": 1.0
+      },
+      {
+        "file_path": "models.py",
+        "symbol": "Student.has_common_interest",
+        "line_start": 17,
+        "line_end": 19,
+        "lines_owned": 3,
+        "share": 1.0
+      },
+      {
+        "file_path": "models.py",
+        "symbol": "Student.profile_summary",
+        "line_start": 21,
+        "line_end": 28,
+        "lines_owned": 8,
+        "share": 1.0
+      },
+      {
+        "file_path": "models.py",
+        "symbol": "create_student",
+        "line_start": 31,
+        "line_end": 47,
+        "lines_owned": 17,
+        "share": 1.0
+      },
+      {
+        "file_path": "models.py",
+        "symbol": "is_suitable_partner",
+        "line_start": 50,
+        "line_end": 57,
+        "lines_owned": 8,
+        "share": 1.0
+      },
+      {
+        "file_path": "ranking.py",
+        "symbol": null,
+        "line_start": 1,
+        "line_end": 45,
+        "lines_owned": 12,
+        "share": 0.6667
+      },
+      {
+        "file_path": "ranking.py",
+        "symbol": "score_student_pair",
+        "line_start": 7,
+        "line_end": 17,
+        "lines_owned": 11,
+        "share": 1.0
+      },
+      {
+        "file_path": "ranking.py",
+        "symbol": "top_k_partners",
+        "line_start": 20,
+        "line_end": 36,
+        "lines_owned": 17,
+        "share": 1.0
+      },
+      {
+        "file_path": "ranking.py",
+        "symbol": "filter_by_min_score",
+        "line_start": 39,
+        "line_end": 43,
+        "lines_owned": 5,
+        "share": 1.0
+      },
+      {
+        "file_path": "ranking.py",
+        "symbol": "explain_match_score",
+        "line_start": 46,
+        "line_end": 50,
+        "lines_owned": 5,
+        "share": 1.0
+      },
+      {
+        "file_path": "utils/__init__.py",
+        "symbol": null,
+        "line_start": 1,
+        "line_end": 5,
+        "lines_owned": 5,
+        "share": 1.0
+      },
+      {
+        "file_path": "utils/vector_ops.py",
+        "symbol": null,
+        "line_start": 1,
+        "line_end": 17,
+        "lines_owned": 9,
+        "share": 1.0
+      },
+      {
+        "file_path": "utils/vector_ops.py",
+        "symbol": "dot_product",
+        "line_start": 6,
+        "line_end": 10,
+        "lines_owned": 5,
+        "share": 1.0
+      },
+      {
+        "file_path": "utils/vector_ops.py",
+        "symbol": "vector_norm",
+        "line_start": 13,
+        "line_end": 15,
+        "lines_owned": 3,
+        "share": 1.0
+      },
+      {
+        "file_path": "utils/vector_ops.py",
+        "symbol": "normalize_vector",
+        "line_start": 18,
+        "line_end": 23,
+        "lines_owned": 6,
+        "share": 1.0
+      }
+    ],
+    "Priya Nair": [
+      {
+        "file_path": "ranking.py",
+        "symbol": null,
+        "line_start": 51,
+        "line_end": 80,
+        "lines_owned": 6,
+        "share": 0.3333
+      },
+      {
+        "file_path": "ranking.py",
+        "symbol": "find_mutual_partners",
+        "line_start": 53,
+        "line_end": 69,
+        "lines_owned": 17,
+        "share": 1.0
+      },
+      {
+        "file_path": "ranking.py",
+        "symbol": "reciprocal_match_score",
+        "line_start": 72,
+        "line_end": 78,
+        "lines_owned": 7,
+        "share": 1.0
+      },
+      {
+        "file_path": "ranking.py",
+        "symbol": "harmonic_rank_score",
+        "line_start": 81,
+        "line_end": 85,
+        "lines_owned": 5,
+        "share": 1.0
+      },
+      {
+        "file_path": "similarity.py",
+        "symbol": null,
+        "line_start": 1,
+        "line_end": 31,
+        "lines_owned": 9,
+        "share": 1.0
+      },
+      {
+        "file_path": "similarity.py",
+        "symbol": "cosine_similarity",
+        "line_start": 6,
+        "line_end": 17,
+        "lines_owned": 12,
+        "share": 1.0
+      },
+      {
+        "file_path": "similarity.py",
+        "symbol": "jaccard_similarity",
+        "line_start": 20,
+        "line_end": 29,
+        "lines_owned": 10,
+        "share": 1.0
+      },
+      {
+        "file_path": "similarity.py",
+        "symbol": "composite_similarity",
+        "line_start": 32,
+        "line_end": 43,
+        "lines_owned": 12,
+        "share": 1.0
+      }
+    ],
+    "Rohan Gupta": [
+      {
+        "file_path": "cli.py",
+        "symbol": null,
+        "line_start": 1,
+        "line_end": 17,
+        "lines_owned": 9,
+        "share": 1.0
+      },
+      {
+        "file_path": "cli.py",
+        "symbol": "format_recommendations",
+        "line_start": 8,
+        "line_end": 15,
+        "lines_owned": 8,
+        "share": 1.0
+      },
+      {
+        "file_path": "cli.py",
+        "symbol": "main",
+        "line_start": 18,
+        "line_end": 24,
+        "lines_owned": 7,
+        "share": 1.0
+      },
+      {
+        "file_path": "data_loader.py",
+        "symbol": null,
+        "line_start": 1,
+        "line_end": 17,
+        "lines_owned": 7,
+        "share": 1.0
+      },
+      {
+        "file_path": "data_loader.py",
+        "symbol": "parse_student_record",
+        "line_start": 6,
+        "line_end": 15,
+        "lines_owned": 10,
+        "share": 1.0
+      },
+      {
+        "file_path": "data_loader.py",
+        "symbol": "load_sample_students",
+        "line_start": 18,
+        "line_end": 34,
+        "lines_owned": 17,
+        "share": 1.0
+      }
+    ]
+  },
+  "authorship_stats": [
+    {
+      "author": "Aman Verma",
+      "email": "aman@example.com",
+      "lines": 135,
+      "share_of_lines": 0.4982
+    },
+    {
+      "author": "Priya Nair",
+      "email": "priya@example.com",
+      "lines": 78,
+      "share_of_lines": 0.2878
+    },
+    {
+      "author": "Rohan Gupta",
+      "email": "rohan@example.com",
+      "lines": 58,
+      "share_of_lines": 0.214
+    }
+  ]
+}
